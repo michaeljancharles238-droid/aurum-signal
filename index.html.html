@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURUM SIGNAL — Asisten News Trading XAU/USD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bg: 'var(--bg)', surface: 'var(--surface)', surface2: 'var(--surface2)',
+        line: 'var(--line)', gold: 'var(--gold)', ivory: 'var(--ivory)',
+        muted: 'var(--muted)', buy: 'var(--buy)', sell: 'var(--sell)'
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        body: ['Archivo', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'monospace']
+      }
+    }
+  }
+};
+</script>
+<style>
+  :root, [data-theme="dark"] {
+    --bg: #14100C; --surface: #1E1812; --surface2: #2A2114;
+    --line: #3B2F1D; --gold: #E2A83D; --ivory: #F0E7D5;
+    --muted: #9C8E75; --buy: #4CBF8F; --sell: #E2604F;
+  }
+  [data-theme="light"] {
+    --bg: #F3EDDF; --surface: #FDFAF2; --surface2: #EFE6D2;
+    --line: #D8CBB0; --gold: #A9761B; --ivory: #2A2115;
+    --muted: #7C7052; --buy: #1E8A61; --sell: #C13E2E;
+  }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--ivory); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  input, select, textarea {
+    background: var(--surface2); border: 1px solid var(--line); color: var(--ivory);
+    border-radius: 8px; padding: 8px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 14px;
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .btn {
+    display:inline-flex; align-items:center; gap:6px; border-radius:8px; padding:8px 14px;
+    font-weight:600; font-size:13px; cursor:pointer; border:1px solid var(--line);
+    background: var(--surface2); color: var(--ivory); transition: transform .08s ease, filter .15s ease;
+  }
+  .btn:hover { filter: brightness(1.15); }
+  .btn:active { transform: scale(.97); }
+  .btn-gold { background: var(--gold); color:#1A1204; border-color: transparent; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+  .impact-high { background: var(--sell); }
+  .impact-med { background: var(--gold); }
+  .impact-low { background: var(--muted); }
+  .ev-card { cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+  .ev-card:hover { border-color: var(--gold); }
+  .ev-card.selected { border-color: var(--gold); background: var(--surface2); }
+  /* ---- Deviation Gauge (elemen signature) ---- */
+  .gauge-track {
+    height: 14px; border-radius: 999px; position: relative;
+    background: linear-gradient(90deg, var(--sell) 0%, color-mix(in srgb, var(--sell) 35%, var(--surface2)) 38%, var(--surface2) 50%, color-mix(in srgb, var(--buy) 35%, var(--surface2)) 62%, var(--buy) 100%);
+    border: 1px solid var(--line);
+  }
+  .gauge-needle {
+    position: absolute; top: -9px; width: 4px; height: 32px; border-radius: 2px;
+    background: var(--gold); box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 70%, transparent);
+    left: 50%; transform: translateX(-50%); transition: left .5s cubic-bezier(.22,1,.36,1);
+  }
+  .gauge-tick { position:absolute; top: 18px; font-size: 10px; color: var(--muted); font-family:'IBM Plex Mono'; }
+  .pulse-dot { animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  @media (prefers-reduced-motion: reduce) {
+    .gauge-needle { transition:none; } .pulse-dot { animation:none; }
+  }
+  table.journal th, table.journal td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align:left; }
+  table.journal th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+</style>
+</head>
+<body class="font-body min-h-screen">
+
+<!-- ============ HEADER ============ -->
+<header class="border-b border-line" style="background: var(--surface);">
+  <div class="max-w-7xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="font-display text-2xl md:text-3xl font-semibold tracking-tight">
+        <span class="text-gold">AURUM</span> SIGNAL
+      </h1>
+      <p class="text-muted text-xs mt-0.5">Asisten news trading XAU/USD — deviasi data, bias arah, dan level TP/SL berbasis statistik</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="text-right">
+        <div id="clock" class="font-mono text-lg font-semibold text-gold">--:--:--</div>
+        <div class="text-muted text-[10px] uppercase tracking-widest">WIB · Jakarta</div>
+      </div>
+      <button id="themeBtn" class="btn" title="Ganti tema">◐</button>
+    </div>
+  </div>
+  <!-- Countdown strip -->
+  <div class="border-t border-line" style="background: var(--surface2);">
+    <div class="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center gap-2 text-sm">
+      <span class="w-2 h-2 rounded-full impact-high pulse-dot inline-block"></span>
+      <span class="text-muted">Event USD berdampak tinggi berikutnya:</span>
+      <span id="nextEvName" class="font-semibold">—</span>
+      <span id="nextEvCountdown" class="font-mono text-gold ml-auto">--:--:--</span>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 py-6 grid gap-6 lg:grid-cols-[1fr_1.15fr]">
+
+  <!-- ============ KALENDER ============ -->
+  <section class="card p-4 flex flex-col gap-3 self-start">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="font-display text-lg font-semibold">Kalender Minggu Ini <span class="text-muted text-xs font-body">(Forex Factory)</span></h2>
+      <div class="flex gap-2">
+        <button id="fetchBtn" class="btn btn-gold">↻ Muat kalender</button>
+        <button id="pasteBtn" class="btn" title="Tempel JSON manual">⌘ Manual</button>
+      </div>
+    </div>
+    <div id="fetchStatus" class="text-xs text-muted">Belum dimuat. Klik "Muat kalender" untuk mengambil jadwal rilis dari feed resmi Forex Factory.</div>
+    <div id="pasteBox" class="hidden flex-col gap-2">
+      <textarea id="pasteArea" rows="4" placeholder='Tempel isi JSON dari https://nfs.faireconomy.media/ff_calendar_thisweek.json di sini…'></textarea>
+      <button id="pasteLoad" class="btn self-start">Muat dari teks</button>
+    </div>
+    <label class="flex items-center gap-2 text-xs text-muted cursor-pointer select-none">
+      <input type="checkbox" id="highOnly" checked style="width:auto"> Hanya dampak tinggi (merah) · mata uang USD
+    </label>
+    <div id="calList" class="flex flex-col gap-2 max-h-[520px] overflow-y-auto pr-1"></div>
+  </section>
+
+  <!-- ============ ANALYZER ============ -->
+  <section class="flex flex-col gap-6">
+    <div class="card p-4">
+      <h2 class="font-display text-lg font-semibold mb-1">Analisis Deviasi</h2>
+      <p class="text-xs text-muted mb-3">Pilih event dari kalender, lalu masukkan angka <b>Actual</b> begitu rilis. Sistem menghitung deviasi vs Forecast dan menerjemahkannya menjadi bias arah XAU/USD.</p>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="col-span-2 md:col-span-4">
+          <label class="text-[11px] text-muted uppercase tracking-wider">Event</label>
+          <input id="evTitle" placeholder="Klik event di kalender…" readonly>
+        </div>
+        <div><label class="text-[11px] text-muted uppercase tracking-wider">Forecast</label><input id="evForecast" placeholder="cth: 3.4%"></div>
+        <div><label class="text-[11px] text-muted uppercase tracking-wider">Previous</label><input id="evPrevious" placeholder="cth: 3.2%"></div>
+        <div><label class="text-[11px] text-muted uppercase tracking-wider text-gold">Actual ★</label><input id="evActual" placeholder="isi saat rilis"></div>
+        <div><label class="text-[11px] text-muted uppercase tracking-wider">Harga XAU saat ini</label><input id="xauPrice" placeholder="cth: 3355.40" inputmode="decimal"></div>
+      </div>
+
+      <div id="statBadge" class="text-xs text-muted mb-3 hidden">
+        Profil event terdeteksi: <span id="statName" class="text-gold font-semibold"></span> ·
+        rata-rata gerak historis <span id="statMove" class="font-mono"></span> ·
+        <span id="statLogic"></span>
+      </div>
+
+      <!-- Mode pidato / naratif -->
+      <div id="speechMode" class="hidden mb-3 p-3 rounded-lg border border-line" style="background:var(--surface2)">
+        <div class="text-xs text-muted mb-2">Event naratif (pidato/testimoni) tidak punya angka forecast. Nilai nadanya secara manual:</div>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn tone-btn" data-tone="-2">Sangat Hawkish</button>
+          <button class="btn tone-btn" data-tone="-1">Hawkish</button>
+          <button class="btn tone-btn" data-tone="0">Netral</button>
+          <button class="btn tone-btn" data-tone="1">Dovish</button>
+          <button class="btn tone-btn" data-tone="2">Sangat Dovish</button>
+        </div>
+      </div>
+
+      <button id="analyzeBtn" class="btn btn-gold w-full justify-center text-base py-3">⚖ Analisis Sekarang</button>
+    </div>
+
+    <!-- Hasil -->
+    <div id="resultCard" class="card p-4 hidden">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+        <h2 class="font-display text-lg font-semibold">Hasil Analisis</h2>
+        <div id="biasBadge" class="font-mono font-semibold text-sm px-3 py-1.5 rounded-lg"></div>
+      </div>
+
+      <!-- Gauge -->
+      <div class="mb-6 px-1">
+        <div class="gauge-track">
+          <div id="needle" class="gauge-needle"></div>
+          <span class="gauge-tick" style="left:0">SELL KUAT</span>
+          <span class="gauge-tick" style="left:50%; transform:translateX(-50%)">NETRAL</span>
+          <span class="gauge-tick" style="right:0">BUY KUAT</span>
+        </div>
+      </div>
+
+      <div id="deviationInfo" class="text-sm mb-4 text-muted"></div>
+
+      <div id="levelsGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+
+      <div id="strategyNote" class="text-xs p-3 rounded-lg border border-line leading-relaxed" style="background:var(--surface2)"></div>
+
+      <!-- Checklist konfirmasi chart -->
+      <div id="chartChecklist" class="hidden mt-4 p-3 rounded-lg border border-line" style="background:var(--surface2)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div class="text-xs font-semibold uppercase tracking-widest text-muted">Konfirmasi Chart (M1–M5)</div>
+          <div id="checkStatus" class="font-mono text-xs font-semibold px-2.5 py-1 rounded-md"></div>
+        </div>
+        <div id="checkItems" class="flex flex-col gap-1.5"></div>
+        <div class="text-[11px] text-muted mt-2">Buka chart di MT4/MT5. Sinyal fundamental baru layak dieksekusi jika SEMUA poin tercentang. Jika ada yang tidak terpenuhi — skip, bukan kompromi.</div>
+      </div>
+
+      <button id="saveJournal" class="btn mt-4">✎ Simpan ke Jurnal</button>
+    </div>
+
+    <!-- Statistik pergerakan (editable) -->
+    <details class="card p-4">
+      <summary class="font-display text-lg font-semibold cursor-pointer">Statistik Pergerakan per Event <span class="text-muted text-xs font-body">(bisa diedit — sesuaikan dengan datamu)</span></summary>
+      <p class="text-xs text-muted mt-2 mb-3">Angka di bawah adalah estimasi rata-rata pergerakan XAU/USD (dalam USD/oz) pada 30–60 menit pertama setelah rilis. Nanti di Tahap 2, database Spreadsheet-mu akan menggantikan estimasi ini dengan data aktual.</p>
+      <div id="statsEditor" class="grid gap-2"></div>
+    </details>
+  </section>
+</main>
+
+<!-- ============ JURNAL ============ -->
+<section class="max-w-7xl mx-auto px-4 pb-8">
+  <div class="card p-4">
+    <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+      <h2 class="font-display text-lg font-semibold">Jurnal Trading Berita</h2>
+      <div class="flex gap-2">
+        <button id="exportBtn" class="btn">⬇ Ekspor JSON</button>
+        <button id="clearBtn" class="btn">Hapus semua</button>
+      </div>
+    </div>
+    <p class="text-xs text-muted mb-3">Setelah trade selesai, isi kolom <b>Hasil (pips)</b>. Data ini adalah bahan bakar akurasi jangka panjangmu — jangan skip.</p>
+    <div class="overflow-x-auto">
+      <table class="journal w-full text-sm font-mono">
+        <thead><tr>
+          <th>Waktu</th><th>Event</th><th>F / A</th><th>Bias</th><th>Entry</th><th>TP2</th><th>SL</th><th>Hasil (pips)</th><th></th>
+        </tr></thead>
+        <tbody id="journalBody"></tbody>
+      </table>
+    </div>
+    <div id="journalEmpty" class="text-muted text-sm py-6 text-center">Belum ada catatan. Analisis pertamamu akan muncul di sini.</div>
+  </div>
+
+  <p class="text-[11px] text-muted mt-6 leading-relaxed text-center max-w-3xl mx-auto">
+    ⚠ AURUM SIGNAL adalah alat bantu keputusan (decision support), bukan nasihat keuangan dan bukan penjamin profit.
+    Pasar dapat bergerak berlawanan dengan data (priced-in, revisi, likuiditas tipis). Selalu gunakan manajemen risiko —
+    risiko per trade yang umum disarankan komunitas trading adalah 1–2% dari ekuitas. Keputusan akhir sepenuhnya milikmu.
+  </p>
+</section>
+
+<script>
+/* ================= UTILITAS ================= */
+const $ = (id) => document.getElementById(id);
+
+// Storage aman: localStorage jika tersedia, fallback memori (mis. saat pratinjau di sandbox)
+const safeStore = (() => {
+  let ok = false; const mem = {};
+  try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); ok = true; } catch(e){}
+  return {
+    get(k){ try { return ok ? JSON.parse(localStorage.getItem(k)) : (mem[k] ?? null); } catch(e){ return null; } },
+    set(k,v){ try { ok ? localStorage.setItem(k, JSON.stringify(v)) : (mem[k]=v); } catch(e){ mem[k]=v; } }
+  };
+})();
+
+// Parser angka ekonomi: "180K" -> 180, "3.4%" -> 3.4, "-0.2%" -> -0.2, "1.25M" -> 1250 (dinormalkan ke K bila K/M campur)
+function parseEcoNum(str){
+  if (str == null) return null;
+  const s = String(str).trim().replace(',', '.');
+  if (!s) return null;
+  const m = s.match(/^(-?\d+(\.\d+)?)\s*(%|K|M|B|T)?$/i);
+  if (!m) return null;
+  let v = parseFloat(m[1]);
+  const suf = (m[3]||'').toUpperCase();
+  if (suf === 'M') v *= 1000;        // normalkan ke ribuan (K)
+  else if (suf === 'B') v *= 1e6;
+  else if (suf === 'T') v *= 1e9;
+  return v;
+}
+
+const fmtUsd = (n) => n.toFixed(2);
+const toPips = (usd) => Math.round(usd * 10); // XAU: $0.10 = 1 pip
+
+/* ================= PROFIL STATISTIK EVENT ================= */
+const DEFAULT_STATS = [
+  { id:'nfp',    label:'Non-Farm Payrolls',        keys:['non-farm','nonfarm'],            move:[18,35], inverted:false, sigW:40,    sigS:120,  unit:'K'   },
+  { id:'unrate', label:'Unemployment Rate',        keys:['unemployment rate'],             move:[10,20], inverted:true,  sigW:0.1,   sigS:0.3,  unit:'pp'  },
+  { id:'cpi',    label:'CPI (m/m & y/y)',          keys:['cpi'],                           move:[15,30], inverted:false, sigW:0.1,   sigS:0.3,  unit:'pp'  },
+  { id:'pce',    label:'Core PCE Price Index',     keys:['pce'],                           move:[10,20], inverted:false, sigW:0.1,   sigS:0.2,  unit:'pp'  },
+  { id:'fomc',   label:'FOMC / Federal Funds Rate',keys:['federal funds','fomc'],          move:[25,45], inverted:false, sigW:0.125, sigS:0.25, unit:'pp'  },
+  { id:'gdp',    label:'GDP',                      keys:['gdp'],                           move:[10,20], inverted:false, sigW:0.3,   sigS:0.8,  unit:'pp'  },
+  { id:'retail', label:'Retail Sales',             keys:['retail sales'],                  move:[8,18],  inverted:false, sigW:0.3,   sigS:0.8,  unit:'pp'  },
+  { id:'ism',    label:'ISM PMI',                  keys:['ism'],                           move:[8,15],  inverted:false, sigW:1,     sigS:3,    unit:'idx' },
+  { id:'claims', label:'Unemployment Claims',      keys:['claims'],                        move:[5,10],  inverted:true,  sigW:15,    sigS:40,   unit:'K'   },
+  { id:'adp',    label:'ADP Employment Change',    keys:['adp'],                           move:[8,15],  inverted:false, sigW:30,    sigS:90,   unit:'K'   },
+  { id:'speech', label:'Pidato Fed (Powell dkk.)', keys:['speaks','speech','testifies','powell'], move:[10,30], inverted:false, manual:true },
+  { id:'other',  label:'Event USD lainnya',        keys:[],                                move:[8,15],  inverted:false, relW:10,   relS:30 }
+];
+let STATS = safeStore.get('aurum_stats') || DEFAULT_STATS;
+
+function matchStat(title){
+  const t = (title||'').toLowerCase();
+  for (const s of STATS) if (s.keys && s.keys.some(k => t.includes(k))) return s;
+  return STATS.find(s => s.id === 'other');
+}
+
+/* ================= JAM & COUNTDOWN ================= */
+let calendar = safeStore.get('aurum_cal') || [];
+function tick(){
+  const now = new Date();
+  $('clock').textContent = new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(now);
+  // countdown ke event USD high-impact berikutnya
+  const next = calendar
+    .filter(e => e.country === 'USD' && e.impact === 'High' && new Date(e.date) > now)
+    .sort((a,b) => new Date(a.date) - new Date(b.date))[0];
+  if (next){
+    $('nextEvName').textContent = next.title;
+    const diff = Math.max(0, (new Date(next.date) - now) / 1000);
+    const h = Math.floor(diff/3600), m = Math.floor((diff%3600)/60), s = Math.floor(diff%60);
+    $('nextEvCountdown').textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  } else {
+    $('nextEvName').textContent = calendar.length ? 'Tidak ada lagi minggu ini' : '—';
+    $('nextEvCountdown').textContent = '--:--:--';
+  }
+}
+setInterval(tick, 1000); tick();
+
+/* ================= FETCH KALENDER FF ================= */
+const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+const PROXIES = [
+  u => u,
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u)
+];
+
+async function fetchCalendar(){
+  $('fetchStatus').textContent = 'Mengambil kalender…';
+  for (const wrap of PROXIES){
+    try {
+      const res = await fetch(wrap(FF_URL), { cache:'no-store' });
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      if (Array.isArray(data) && data.length){ applyCalendar(data); return; }
+    } catch(e){ /* coba proxy berikutnya */ }
+  }
+  $('fetchStatus').innerHTML = '⚠ Gagal fetch otomatis (CORS/jaringan). Gunakan tombol <b>Manual</b>: buka <span class="font-mono">nfs.faireconomy.media/ff_calendar_thisweek.json</span> di tab baru, salin semua, lalu tempel.';
+}
+
+function applyCalendar(data){
+  calendar = data;
+  safeStore.set('aurum_cal', data);
+  const t = new Intl.DateTimeFormat('id-ID',{ timeZone:'Asia/Jakarta', dateStyle:'medium', timeStyle:'short'}).format(new Date());
+  $('fetchStatus').textContent = `✓ ${data.length} event dimuat · diperbarui ${t} WIB`;
+  renderCalendar();
+}
+
+/* ================= RENDER KALENDER ================= */
+let selectedIdx = -1;
+function renderCalendar(){
+  const highOnly = $('highOnly').checked;
+  const list = $('calList'); list.innerHTML = '';
+  const fmtDay  = new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', weekday:'short', day:'numeric', month:'short' });
+  const fmtTime = new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', hour:'2-digit', minute:'2-digit', hour12:false });
+  let lastDay = '';
+  calendar.forEach((e, i) => {
+    if (e.country !== 'USD') return;
+    if (highOnly && e.impact !== 'High') return;
+    const d = new Date(e.date);
+    const dayLbl = fmtDay.format(d);
+    if (dayLbl !== lastDay){
+      lastDay = dayLbl;
+      const h = document.createElement('div');
+      h.className = 'text-[11px] uppercase tracking-widest text-muted mt-2';
+      h.textContent = dayLbl;
+      list.appendChild(h);
+    }
+    const impCls = e.impact === 'High' ? 'impact-high' : e.impact === 'Medium' ? 'impact-med' : 'impact-low';
+    const past = d < new Date();
+    const card = document.createElement('div');
+    card.className = 'ev-card card p-3 flex items-center gap-3' + (i === selectedIdx ? ' selected' : '') + (past ? ' opacity-50' : '');
+    card.innerHTML = `
+      <span class="w-2.5 h-2.5 rounded-full ${impCls} shrink-0"></span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold truncate">${e.title}</div>
+        <div class="text-[11px] text-muted font-mono">F: ${e.forecast || '—'} · P: ${e.previous || '—'}</div>
+      </div>
+      <div class="font-mono text-sm text-gold shrink-0">${fmtTime.format(d)}</div>`;
+    card.onclick = () => selectEvent(i);
+    list.appendChild(card);
+  });
+  if (!list.children.length){
+    list.innerHTML = '<div class="text-muted text-sm py-4 text-center">Tidak ada event USD pada filter ini.</div>';
+  }
+}
+
+let currentTone = null;
+function selectEvent(i){
+  selectedIdx = i;
+  const e = calendar[i];
+  $('evTitle').value = e.title;
+  $('evForecast').value = e.forecast || '';
+  $('evPrevious').value = e.previous || '';
+  $('evActual').value = '';
+  currentTone = null;
+  const stat = matchStat(e.title);
+  $('statBadge').classList.remove('hidden');
+  $('statName').textContent = stat.label;
+  $('statMove').textContent = `$${stat.move[0]}–$${stat.move[1]} (${toPips(stat.move[0])}–${toPips(stat.move[1])} pips)`;
+  $('statLogic').textContent = stat.manual ? 'dinilai manual (hawkish/dovish)'
+    : stat.inverted ? 'angka LEBIH TINGGI dari forecast = USD melemah → emas cenderung NAIK'
+                    : 'angka LEBIH TINGGI dari forecast = USD menguat → emas cenderung TURUN';
+  $('speechMode').classList.toggle('hidden', !stat.manual);
+  renderCalendar();
+  $('evActual').scrollIntoView({ block:'center' });
+}
+
+/* ================= ANALISIS ================= */
+document.querySelectorAll('.tone-btn').forEach(b => b.onclick = () => {
+  currentTone = parseInt(b.dataset.tone, 10);
+  document.querySelectorAll('.tone-btn').forEach(x => x.classList.remove('btn-gold'));
+  b.classList.add('btn-gold');
+});
+
+let lastAnalysis = null;
+$('analyzeBtn').onclick = () => {
+  const title = $('evTitle').value.trim() || 'Event manual';
+  const stat = matchStat(title);
+  const price = parseFloat(($('xauPrice').value || '').replace(',', '.'));
+  if (!price || price <= 0){ alert('Isi dulu harga XAU/USD saat ini (contoh: 3355.40).'); return; }
+
+  let goldScore; // -1 (sell kuat) … +1 (buy kuat)
+  let devText;
+
+  if (stat.manual){
+    if (currentTone === null){ alert('Pilih dulu nada pidato (hawkish/dovish).'); return; }
+    goldScore = currentTone / 2; // hawkish = USD kuat = emas turun
+    devText = `Penilaian manual: ${['Sangat Hawkish','Hawkish','Netral','Dovish','Sangat Dovish'][currentTone+2]}.`;
+  } else {
+    const f = parseEcoNum($('evForecast').value) ?? parseEcoNum($('evPrevious').value);
+    const a = parseEcoNum($('evActual').value);
+    if (a === null || f === null){ alert('Isi angka Forecast dan Actual (contoh: 3.4% atau 180K).'); return; }
+    const diff = a - f;
+    let norm;
+    if (stat.relW){ // ambang relatif (%)
+      const rel = Math.abs(f) > 1e-9 ? (diff / Math.abs(f)) * 100 : 0;
+      norm = Math.max(-1, Math.min(1, rel / stat.relS));
+      devText = `Actual ${$('evActual').value} vs Forecast ${$('evForecast').value} → deviasi ${rel >= 0 ? '+' : ''}${rel.toFixed(1)}%.`;
+    } else { // ambang absolut dalam satuan asli
+      norm = Math.max(-1, Math.min(1, diff / stat.sigS));
+      devText = `Actual ${$('evActual').value} vs Forecast ${$('evForecast').value} → selisih ${diff >= 0 ? '+' : ''}${+diff.toFixed(3)} ${stat.unit || ''}.`;
+    }
+    const usdScore = stat.inverted ? -norm : norm; // + = USD menguat
+    goldScore = -usdScore;
+  }
+
+  const absS = Math.abs(goldScore);
+  const strength = absS >= 0.75 ? 'KUAT' : absS >= 0.35 ? 'MODERAT' : 'LEMAH';
+  const factor   = absS >= 0.75 ? 1.0    : absS >= 0.35 ? 0.65      : 0;
+  const bias = factor === 0 ? 'NETRAL' : (goldScore > 0 ? 'BUY' : 'SELL');
+
+  // Level
+  const avg = (stat.move[0] + stat.move[1]) / 2;
+  const range = avg * factor;
+  const dir = goldScore > 0 ? 1 : -1;
+  const levels = factor === 0 ? null : {
+    entry: price,
+    tp1: price + dir * range * 0.6,
+    tp2: price + dir * range,
+    sl:  price - dir * range * 0.5
+  };
+
+  // Render
+  $('resultCard').classList.remove('hidden');
+  $('needle').style.left = `${50 + goldScore * 48}%`;
+  const badge = $('biasBadge');
+  badge.textContent = bias === 'NETRAL' ? '◦ NETRAL — hindari entry' : `${bias === 'BUY' ? '▲ BUY' : '▼ SELL'} · sinyal ${strength}`;
+  badge.style.background = bias === 'BUY' ? 'var(--buy)' : bias === 'SELL' ? 'var(--sell)' : 'var(--surface2)';
+  badge.style.color = bias === 'NETRAL' ? 'var(--muted)' : '#14100C';
+  $('deviationInfo').textContent = devText + ` Profil: ${stat.label}.`;
+
+  const g = $('levelsGrid'); g.innerHTML = '';
+  if (levels){
+    const rows = [
+      ['ENTRY', levels.entry, 'var(--gold)'],
+      ['TP 1 (parsial)', levels.tp1, 'var(--buy)'],
+      ['TP 2 (penuh)', levels.tp2, 'var(--buy)'],
+      ['STOP LOSS', levels.sl, 'var(--sell)']
+    ];
+    rows.forEach(([lbl, val, col]) => {
+      const pipDist = toPips(Math.abs(val - levels.entry));
+      g.innerHTML += `
+        <div class="p-3 rounded-lg border border-line" style="background:var(--surface2)">
+          <div class="text-[10px] uppercase tracking-widest text-muted">${lbl}</div>
+          <div class="font-mono text-lg font-semibold" style="color:${col}">${fmtUsd(val)}</div>
+          ${lbl !== 'ENTRY' ? `<div class="text-[11px] text-muted font-mono">±${pipDist} pips</div>` : '<div class="text-[11px] text-muted font-mono">harga sekarang</div>'}
+        </div>`;
+    });
+    $('strategyNote').innerHTML =
+      `<b class="text-gold">Catatan eksekusi:</b> Jangan entry pada detik pertama — spread melebar dan slippage tinggi saat rilis.
+       Pola yang umum dipakai trader berita: tunggu <b>spike awal 1–3 menit</b>, lalu entry saat <b>retrace/retest</b> ke arah bias.
+       TP1 (60% jarak) untuk amankan sebagian posisi, sisanya biarkan ke TP2. RR sekitar 1 : 2.
+       Batalkan rencana jika harga sudah bergerak melebihi TP1 sebelum kamu masuk.`;
+  } else {
+    $('strategyNote').innerHTML =
+      `<b class="text-gold">Deviasi terlalu kecil.</b> Data hampir sesuai ekspektasi pasar — reaksi biasanya berupa whipsaw dua arah tanpa tren jelas.
+       Saran: <b>jangan entry</b> berdasarkan rilis ini. Tunggu event berikutnya atau kembali ke analisis teknikal biasa.`;
+  }
+
+  lastAnalysis = { time: new Date().toISOString(), title, forecast: $('evForecast').value, actual: stat.manual ? devText : $('evActual').value, bias, strength, levels };
+  renderChecklist(bias, levels);
+};
+
+/* ============ CHECKLIST KONFIRMASI CHART ============ */
+const CHECK_ITEMS = (bias, levels) => [
+  `Tidak ada Support/Resistance kuat antara Entry dan TP1${levels ? ` (${fmtUsd(Math.min(levels.entry, levels.tp1))}–${fmtUsd(Math.max(levels.entry, levels.tp1))})` : ''} — cek high/low kemarin & angka bulat`,
+  `Belum priced-in: 15–30 menit sebelum rilis harga TIDAK bergerak kuat searah ${bias}`,
+  `Candle M1 pertama setelah rilis searah bias ${bias} (body dominan, bukan wick panjang menolak arah)`,
+  'Spread sudah kembali normal (bukan detik-detik pertama rilis)',
+  'Sudah ada retrace/retest dari spike awal — bukan mengejar harga (chasing)'
+];
+function renderChecklist(bias, levels){
+  const box = $('chartChecklist');
+  if (bias === 'NETRAL'){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const wrap = $('checkItems'); wrap.innerHTML = '';
+  CHECK_ITEMS(bias, levels).forEach((txt, i) => {
+    const row = document.createElement('label');
+    row.className = 'flex items-start gap-2 text-xs cursor-pointer select-none leading-relaxed';
+    row.innerHTML = `<input type="checkbox" class="chk mt-0.5" style="width:auto" data-i="${i}"><span>${txt}</span>`;
+    wrap.appendChild(row);
+  });
+  wrap.querySelectorAll('.chk').forEach(c => c.onchange = updateCheckStatus);
+  updateCheckStatus();
+}
+function updateCheckStatus(){
+  const boxes = [...document.querySelectorAll('#checkItems .chk')];
+  const done = boxes.filter(b => b.checked).length;
+  const el = $('checkStatus');
+  if (done === boxes.length && boxes.length){
+    el.textContent = '✓ SIAP ENTRY';
+    el.style.background = 'var(--buy)'; el.style.color = '#14100C';
+  } else {
+    el.textContent = `TUNGGU KONFIRMASI · ${done}/${boxes.length}`;
+    el.style.background = 'var(--surface)'; el.style.color = 'var(--muted)';
+  }
+}
+
+/* ================= JURNAL ================= */
+let journal = safeStore.get('aurum_journal') || [];
+function renderJournal(){
+  const body = $('journalBody'); body.innerHTML = '';
+  $('journalEmpty').style.display = journal.length ? 'none' : 'block';
+  const fmt = new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false });
+  journal.forEach((j, i) => {
+    const tr = document.createElement('tr');
+    const biasCol = j.bias === 'BUY' ? 'var(--buy)' : j.bias === 'SELL' ? 'var(--sell)' : 'var(--muted)';
+    tr.innerHTML = `
+      <td class="whitespace-nowrap">${fmt.format(new Date(j.time))}</td>
+      <td class="max-w-[180px] truncate" title="${j.title}">${j.title}</td>
+      <td class="whitespace-nowrap">${j.forecast || '—'} / ${j.actual || '—'}</td>
+      <td style="color:${biasCol}" class="font-semibold">${j.bias}</td>
+      <td>${j.levels ? fmtUsd(j.levels.entry) : '—'}</td>
+      <td>${j.levels ? fmtUsd(j.levels.tp2) : '—'}</td>
+      <td>${j.levels ? fmtUsd(j.levels.sl) : '—'}</td>
+      <td><input value="${j.result ?? ''}" data-i="${i}" class="result-in" style="width:80px;padding:4px 6px" placeholder="±pips"></td>
+      <td><button data-i="${i}" class="del-btn btn" style="padding:4px 8px">✕</button></td>`;
+    body.appendChild(tr);
+  });
+  body.querySelectorAll('.result-in').forEach(inp => inp.onchange = () => {
+    journal[+inp.dataset.i].result = inp.value; safeStore.set('aurum_journal', journal);
+  });
+  body.querySelectorAll('.del-btn').forEach(b => b.onclick = () => {
+    journal.splice(+b.dataset.i, 1); safeStore.set('aurum_journal', journal); renderJournal();
+  });
+}
+$('saveJournal').onclick = () => {
+  if (!lastAnalysis) return;
+  journal.unshift(lastAnalysis);
+  safeStore.set('aurum_journal', journal);
+  renderJournal();
+  $('saveJournal').textContent = '✓ Tersimpan'; setTimeout(() => $('saveJournal').textContent = '✎ Simpan ke Jurnal', 1500);
+};
+$('exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(journal, null, 2)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `aurum-journal-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+};
+$('clearBtn').onclick = () => { if (confirm('Hapus semua catatan jurnal?')){ journal = []; safeStore.set('aurum_journal', journal); renderJournal(); } };
+
+/* ================= EDITOR STATISTIK ================= */
+function renderStatsEditor(){
+  const box = $('statsEditor'); box.innerHTML = '';
+  STATS.forEach((s, i) => {
+    if (s.id === 'other') return;
+    box.innerHTML += `
+      <div class="flex items-center gap-2 text-sm flex-wrap">
+        <span class="flex-1 min-w-[180px]">${s.label} ${s.inverted ? '<span class="text-[10px] text-gold">(terbalik)</span>' : ''}</span>
+        <span class="text-muted text-xs">gerak $</span>
+        <input value="${s.move[0]}" data-i="${i}" data-f="0" class="stat-in" style="width:64px" inputmode="decimal">
+        <span class="text-muted">–</span>
+        <input value="${s.move[1]}" data-i="${i}" data-f="1" class="stat-in" style="width:64px" inputmode="decimal">
+      </div>`;
+  });
+  box.querySelectorAll('.stat-in').forEach(inp => inp.onchange = () => {
+    const v = parseFloat(inp.value.replace(',', '.'));
+    if (!isNaN(v)) { STATS[+inp.dataset.i].move[+inp.dataset.f] = v; safeStore.set('aurum_stats', STATS); }
+  });
+}
+
+/* ================= EVENT BINDING ================= */
+$('fetchBtn').onclick = fetchCalendar;
+$('pasteBtn').onclick = () => $('pasteBox').classList.toggle('hidden');
+$('pasteLoad').onclick = () => {
+  try {
+    const data = JSON.parse($('pasteArea').value);
+    if (Array.isArray(data)) { applyCalendar(data); $('pasteBox').classList.add('hidden'); }
+    else alert('Format tidak dikenali — harus berupa array JSON.');
+  } catch(e){ alert('JSON tidak valid: ' + e.message); }
+};
+$('highOnly').onchange = renderCalendar;
+$('themeBtn').onclick = () => {
+  const el = document.documentElement;
+  const next = el.dataset.theme === 'dark' ? 'light' : 'dark';
+  el.dataset.theme = next; safeStore.set('aurum_theme', next);
+};
+const savedTheme = safeStore.get('aurum_theme');
+if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+
+/* ================= INIT ================= */
+renderCalendar();
+renderJournal();
+renderStatsEditor();
+if (!calendar.length) fetchCalendar();
+</script>
+</body>
+</html>

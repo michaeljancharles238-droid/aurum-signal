@@ -182,9 +182,34 @@ tailwind.config = {
           <button class="btn tone-btn" data-tone="1">Dovish</button>
           <button class="btn tone-btn" data-tone="2">Sangat Dovish</button>
         </div>
+        <!-- Analisis AI -->
+        <div class="mt-3 pt-3 border-t border-line">
+          <label class="text-[11px] text-muted uppercase tracking-wider">🤖 Atau biarkan AI menilai — tempel headline / kutipan pidato / berita geopolitik</label>
+          <textarea id="aiText" rows="3" class="mt-1" placeholder='cth: "Powell: inflation remains too high, we are prepared to raise rates further if needed…" — bahasa Inggris atau Indonesia sama-sama bisa'></textarea>
+          <div class="flex gap-2 mt-2 items-center flex-wrap">
+            <button id="aiBtn" class="btn btn-gold">🤖 Nilai dengan AI</button>
+            <span id="aiStatus" class="text-xs text-muted"></span>
+          </div>
+          <div id="aiResult" class="hidden mt-2 text-xs p-3 rounded-lg border border-line leading-relaxed" style="background:var(--surface)"></div>
+        </div>
       </div>
 
       <button id="analyzeBtn" class="btn btn-gold w-full justify-center text-base py-3">⚖ Analisis Sekarang</button>
+    </div>
+
+    <!-- Chart Live TradingView -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Chart Live XAU/USD <span class="text-muted text-xs font-body">(TradingView)</span></h2>
+        <div class="flex gap-2 items-center">
+          <button class="btn tv-int" data-int="1">M1</button>
+          <button class="btn tv-int" data-int="5">M5</button>
+          <button class="btn tv-int" data-int="15">M15</button>
+          <button id="tvToggle" class="btn btn-gold">▶ Tampilkan Chart</button>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-2">Pakai chart ini untuk mencentang Konfirmasi Chart tanpa pindah layar. Data real-time dari TradingView (OANDA).</p>
+      <div id="tvWrap" class="hidden rounded-lg overflow-hidden border border-line" style="height:430px"></div>
     </div>
 
     <!-- Hasil -->
@@ -218,6 +243,16 @@ tailwind.config = {
         </div>
         <div id="checkItems" class="flex flex-col gap-1.5"></div>
         <div class="text-[11px] text-muted mt-2">Buka chart di MT4/MT5. Sinyal fundamental baru layak dieksekusi jika SEMUA poin tercentang. Jika ada yang tidak terpenuhi — skip, bukan kompromi.</div>
+      </div>
+
+      <!-- Lampiran screenshot chart -->
+      <div id="shotZone" class="mt-4 p-3 rounded-lg border border-dashed border-line text-center text-xs text-muted cursor-pointer select-none">
+        📷 Lampirkan screenshot chart — klik untuk pilih file, atau langsung <b>Ctrl+V</b> (paste) di halaman ini
+        <input type="file" id="shotFile" accept="image/*" class="hidden">
+      </div>
+      <div id="shotPreview" class="hidden mt-2 flex items-center gap-3">
+        <img id="shotImg" class="rounded-lg border border-line" style="max-height:90px">
+        <button id="shotRemove" class="btn" style="padding:4px 10px">✕ Hapus lampiran</button>
       </div>
 
       <button id="saveJournal" class="btn mt-4">✎ Simpan ke Jurnal</button>
@@ -436,6 +471,53 @@ document.querySelectorAll('.tone-btn').forEach(b => b.onclick = () => {
   b.classList.add('btn-gold');
 });
 
+/* ================= ANALISIS AI BERITA NARATIF (TAHAP 3) ================= */
+$('aiBtn').onclick = async () => {
+  const text = $('aiText').value.trim();
+  if (!gasUrl){
+    alert('Analisis AI memakai jalur Apps Script yang sama dengan logger.\nIsi dulu URL Web App di ikon ⚙ (header), lalu pastikan Apps Script sudah versi v2 + API key terpasang.');
+    return;
+  }
+  if (text.length < 15){ alert('Tempel dulu teks beritanya (minimal 1–2 kalimat).'); return; }
+
+  $('aiBtn').disabled = true;
+  $('aiStatus').textContent = 'Menganalisis…';
+  $('aiResult').classList.add('hidden');
+
+  try {
+    const res = await fetch(gasUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action: 'analyze', text, eventTitle: $('evTitle').value })
+    });
+    const json = await res.json();
+    if (json.status !== 'ok') throw new Error(json.message);
+
+    const r = json.result;
+    // Terapkan hasil AI ke tombol nada (tetap bisa dikoreksi manual)
+    currentTone = Math.max(-2, Math.min(2, Math.round(Number(r.tone) || 0)));
+    document.querySelectorAll('.tone-btn').forEach(x => {
+      x.classList.toggle('btn-gold', parseInt(x.dataset.tone, 10) === currentTone);
+    });
+
+    const toneLbl = ['Sangat Hawkish','Hawkish','Netral','Dovish','Sangat Dovish'][currentTone + 2];
+    $('aiResult').innerHTML =
+      `<b class="text-gold">Penilaian AI: ${toneLbl}</b> · keyakinan ${r.confidence || '-'}<br>` +
+      `${r.reasoning || ''}<br>` +
+      `<span class="text-muted">Dampak ke emas: ${r.gold_impact || '-'}</span><br>` +
+      `<span class="text-muted">Nada sudah dipilihkan otomatis di tombol atas — koreksi manual bila tidak setuju, lalu klik "Analisis Sekarang".</span>`;
+    $('aiResult').classList.remove('hidden');
+    $('aiStatus').textContent = '✓ Selesai';
+  } catch(e){
+    $('aiResult').innerHTML = `<b style="color:var(--sell)">⚠ Gagal:</b> ${e.message}<br>` +
+      `<span class="text-muted">Cek: Apps Script sudah v2? API key terpasang di Script Properties? Deployment sudah "New version"?</span>`;
+    $('aiResult').classList.remove('hidden');
+    $('aiStatus').textContent = '';
+  } finally {
+    $('aiBtn').disabled = false;
+  }
+};
+
 let lastAnalysis = null;
 $('analyzeBtn').onclick = () => {
   const title = $('evTitle').value.trim() || 'Event manual';
@@ -578,7 +660,7 @@ function renderJournal(){
       <td>${j.levels ? fmtUsd(j.levels.tp2) : '—'}</td>
       <td>${j.levels ? fmtUsd(j.levels.sl) : '—'}</td>
       <td><input value="${j.result ?? ''}" data-i="${i}" class="result-in" style="width:80px;padding:4px 6px" placeholder="±pips"></td>
-      <td><button data-i="${i}" class="del-btn btn" style="padding:4px 8px">✕</button></td>`;
+      <td class="whitespace-nowrap">${j.shot ? `<button data-i="${i}" class="shot-view btn" style="padding:4px 8px" title="Lihat screenshot">📷</button> ` : ''}<button data-i="${i}" class="del-btn btn" style="padding:4px 8px">✕</button></td>`;
     body.appendChild(tr);
   });
   body.querySelectorAll('.result-in').forEach(inp => inp.onchange = () => {
@@ -587,14 +669,18 @@ function renderJournal(){
   body.querySelectorAll('.del-btn').forEach(b => b.onclick = () => {
     journal.splice(+b.dataset.i, 1); safeStore.set('aurum_journal', journal); renderJournal();
   });
+  body.querySelectorAll('.shot-view').forEach(b => b.onclick = () => viewShot(journal[+b.dataset.i].shot));
 }
 $('saveJournal').onclick = () => {
   if (!lastAnalysis) return;
-  journal.unshift(lastAnalysis);
+  const entry = Object.assign({}, lastAnalysis);
+  if (pendingShot) entry.shot = pendingShot;
+  journal.unshift(entry);
   safeStore.set('aurum_journal', journal);
   renderJournal();
+  pendingShot = null; $('shotPreview').classList.add('hidden'); $('shotFile').value = '';
   $('saveJournal').textContent = '✓ Tersimpan'; setTimeout(() => $('saveJournal').textContent = '✎ Simpan ke Jurnal', 1500);
-  sendToSheet(lastAnalysis);
+  sendToSheet(lastAnalysis); // gambar sengaja TIDAK dikirim ke Sheet (terlalu besar untuk sel)
 };
 
 /* ================= KONEKSI GOOGLE SHEETS (TAHAP 2) ================= */
@@ -682,6 +768,86 @@ $('exportBtn').onclick = () => {
 };
 $('clearBtn').onclick = () => { if (confirm('Hapus semua catatan jurnal?')){ journal = []; safeStore.set('aurum_journal', journal); renderJournal(); } };
 
+/* ================= CHART LIVE TRADINGVIEW ================= */
+let tvInterval = '5', tvVisible = false;
+function loadTV(){
+  const wrap = $('tvWrap');
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'tradingview-widget-container';
+  box.style.height = '100%';
+  box.innerHTML = '<div class="tradingview-widget-container__widget" style="height:100%"></div>';
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  s.async = true;
+  s.innerHTML = JSON.stringify({
+    autosize: true,
+    symbol: 'OANDA:XAUUSD',
+    interval: tvInterval,
+    timezone: 'Asia/Jakarta',
+    theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
+    style: '1',
+    locale: 'id',
+    allow_symbol_change: false,
+    hide_side_toolbar: true,
+    support_host: 'https://www.tradingview.com'
+  });
+  box.appendChild(s);
+  wrap.appendChild(box);
+  tvVisible = true;
+  $('tvToggle').textContent = '✕ Sembunyikan';
+  document.querySelectorAll('.tv-int').forEach(b => b.classList.toggle('btn-gold', b.dataset.int === tvInterval));
+}
+$('tvToggle').onclick = () => {
+  if (tvVisible){ $('tvWrap').classList.add('hidden'); $('tvWrap').innerHTML = ''; tvVisible = false; $('tvToggle').textContent = '▶ Tampilkan Chart'; }
+  else loadTV();
+};
+document.querySelectorAll('.tv-int').forEach(b => b.onclick = () => { tvInterval = b.dataset.int; loadTV(); });
+
+/* ================= LAMPIRAN SCREENSHOT ================= */
+let pendingShot = null;
+function compressImage(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxW = 900;
+      const scale = Math.min(1, maxW / img.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function attachShot(file){
+  if (!file || !file.type.startsWith('image/')) return;
+  try {
+    pendingShot = await compressImage(file);
+    $('shotImg').src = pendingShot;
+    $('shotPreview').classList.remove('hidden');
+  } catch(e){ alert('Gagal memproses gambar.'); }
+}
+$('shotZone').onclick = () => $('shotFile').click();
+$('shotFile').onchange = () => attachShot($('shotFile').files[0]);
+document.addEventListener('paste', (e) => {
+  if ($('resultCard').classList.contains('hidden')) return; // hanya aktif saat panel hasil terbuka
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+  if (item) attachShot(item.getAsFile());
+});
+$('shotRemove').onclick = () => { pendingShot = null; $('shotPreview').classList.add('hidden'); $('shotFile').value = ''; };
+
+function viewShot(src){
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:99;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px';
+  ov.innerHTML = `<img src="${src}" style="max-width:95%;max-height:95%;border-radius:10px">`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+}
+
 /* ================= EDITOR STATISTIK ================= */
 function renderStatsEditor(){
   const box = $('statsEditor'); box.innerHTML = '';
@@ -717,6 +883,7 @@ $('themeBtn').onclick = () => {
   const el = document.documentElement;
   const next = el.dataset.theme === 'dark' ? 'light' : 'dark';
   el.dataset.theme = next; safeStore.set('aurum_theme', next);
+  if (tvVisible) loadTV(); // sesuaikan tema chart
 };
 const savedTheme = safeStore.get('aurum_theme');
 if (savedTheme) document.documentElement.dataset.theme = savedTheme;

@@ -99,7 +99,21 @@ tailwind.config = {
         <div id="clock" class="font-mono text-lg font-semibold text-gold">--:--:--</div>
         <div class="text-muted text-[10px] uppercase tracking-widest">WIB · Jakarta</div>
       </div>
+      <button id="settingsBtn" class="btn" title="Pengaturan koneksi Spreadsheet">⚙</button>
       <button id="themeBtn" class="btn" title="Ganti tema">◐</button>
+    </div>
+  </div>
+  <!-- Panel pengaturan koneksi Spreadsheet -->
+  <div id="settingsPanel" class="hidden border-t border-line" style="background: var(--surface2);">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-2">
+      <label class="text-[11px] text-muted uppercase tracking-wider">Apps Script Web App URL (Tahap 2 — logger Spreadsheet)</label>
+      <div class="flex gap-2 flex-wrap">
+        <input id="gasUrl" placeholder="https://script.google.com/macros/s/XXXX/exec" class="flex-1 min-w-[280px]">
+        <button id="gasSave" class="btn btn-gold">Simpan</button>
+        <button id="gasTest" class="btn">Tes Koneksi</button>
+        <button id="gasSync" class="btn">↻ Tarik Statistik Histori</button>
+      </div>
+      <div id="gasStatus" class="text-xs text-muted"></div>
     </div>
   </div>
   <!-- Countdown strip -->
@@ -580,6 +594,84 @@ $('saveJournal').onclick = () => {
   safeStore.set('aurum_journal', journal);
   renderJournal();
   $('saveJournal').textContent = '✓ Tersimpan'; setTimeout(() => $('saveJournal').textContent = '✎ Simpan ke Jurnal', 1500);
+  sendToSheet(lastAnalysis);
+};
+
+/* ================= KONEKSI GOOGLE SHEETS (TAHAP 2) ================= */
+let gasUrl = safeStore.get('aurum_gas_url') || '';
+$('gasUrl').value = gasUrl;
+
+$('settingsBtn').onclick = () => $('settingsPanel').classList.toggle('hidden');
+
+$('gasSave').onclick = () => {
+  gasUrl = $('gasUrl').value.trim();
+  safeStore.set('aurum_gas_url', gasUrl);
+  $('gasStatus').textContent = gasUrl ? '✓ URL disimpan di browser ini.' : 'URL dikosongkan.';
+};
+
+async function sendToSheet(entry){
+  if (!gasUrl) return; // Tahap 2 belum diaktifkan, lewati diam-diam
+  try {
+    await fetch(gasUrl, {
+      method: 'POST',
+      mode: 'no-cors', // Apps Script Web App tidak selalu kirim header CORS lengkap
+      headers: { 'Content-Type': 'text/plain' }, // hindari preflight OPTIONS yang sering gagal di Apps Script
+      body: JSON.stringify(entry)
+    });
+  } catch(e) {
+    console.warn('Gagal kirim ke Sheet:', e.message);
+  }
+}
+
+$('gasTest').onclick = async () => {
+  if (!gasUrl){ $('gasStatus').textContent = '⚠ Isi dulu URL-nya.'; return; }
+  $('gasStatus').textContent = 'Menguji koneksi…';
+  try {
+    const res = await fetch(gasUrl, { method:'GET' });
+    const json = await res.json();
+    $('gasStatus').textContent = json.status === 'ok'
+      ? `✓ Terhubung. ${json.data.length} baris data ditemukan di Spreadsheet.`
+      : `⚠ Terhubung tapi error: ${json.message}`;
+  } catch(e){
+    $('gasStatus').textContent = '⚠ Gagal terhubung. Pastikan deployment "Who has access" = Anyone, dan URL benar (berakhiran /exec).';
+  }
+};
+
+$('gasSync').onclick = async () => {
+  if (!gasUrl){ $('gasStatus').textContent = '⚠ Isi dulu URL-nya.'; return; }
+  $('gasStatus').textContent = 'Menarik & menghitung statistik histori…';
+  try {
+    const res = await fetch(gasUrl, { method:'GET' });
+    const json = await res.json();
+    if (json.status !== 'ok') throw new Error(json.message);
+
+    // Kelompokkan baris yang sudah punya "Pergerakan Aktual" terisi manual, per profil event
+    const groups = {};
+    json.data.forEach(row => {
+      const move = parseFloat(row.actualMove);
+      if (!row.title || isNaN(move)) return; // lewati baris yang belum diisi manual di Sheet
+      const stat = matchStat(row.title);
+      if (stat.manual) return; // event naratif tidak masuk statistik numerik
+      (groups[stat.id] ||= []).push(Math.abs(move));
+    });
+
+    let updated = 0;
+    Object.entries(groups).forEach(([id, moves]) => {
+      if (moves.length < 3) return; // butuh minimal 3 sampel biar tidak asal
+      moves.sort((a,b) => a - b);
+      const lo = moves[Math.floor(moves.length * 0.25)];
+      const hi = moves[Math.ceil(moves.length * 0.75) - 1] ?? moves[moves.length - 1];
+      const s = STATS.find(x => x.id === id);
+      if (s){ s.move = [+lo.toFixed(1), +Math.max(hi, lo + 0.1).toFixed(1)]; updated++; }
+    });
+    safeStore.set('aurum_stats', STATS);
+    renderStatsEditor();
+    $('gasStatus').textContent = updated
+      ? `✓ ${updated} profil event diperbarui dari ${json.data.length} baris histori (butuh ≥3 sampel valid per event).`
+      : `Belum cukup data histori (isi kolom "Pergerakan Aktual" di Sheet minimal 3 baris per jenis event).`;
+  } catch(e){
+    $('gasStatus').textContent = '⚠ Gagal menarik data: ' + e.message;
+  }
 };
 $('exportBtn').onclick = () => {
   const blob = new Blob([JSON.stringify(journal, null, 2)], { type:'application/json' });

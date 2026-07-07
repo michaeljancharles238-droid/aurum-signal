@@ -327,8 +327,10 @@ setInterval(tick, 1000); tick();
 const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 const PROXIES = [
   u => u,
+  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u)
+  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u) // fallback terakhir: JSON terbungkus
 ];
 
 async function fetchCalendar(){
@@ -337,11 +339,12 @@ async function fetchCalendar(){
     try {
       const res = await fetch(wrap(FF_URL), { cache:'no-store' });
       if (!res.ok) throw new Error(res.status);
-      const data = await res.json();
+      let data = await res.json();
+      if (data && data.contents) data = JSON.parse(data.contents); // format allorigins /get
       if (Array.isArray(data) && data.length){ applyCalendar(data); return; }
     } catch(e){ /* coba proxy berikutnya */ }
   }
-  $('fetchStatus').innerHTML = '⚠ Gagal fetch otomatis (CORS/jaringan). Gunakan tombol <b>Manual</b>: buka <span class="font-mono">nfs.faireconomy.media/ff_calendar_thisweek.json</span> di tab baru, salin semua, lalu tempel.';
+  $('fetchStatus').innerHTML = '⚠ Gagal fetch otomatis (CORS/jaringan). Gunakan tombol <b>Manual</b>: buka <a class="text-gold underline" href="https://nfs.faireconomy.media/ff_calendar_thisweek.json" target="_blank">feed kalender ini</a> di tab baru, salin semua (Ctrl+A, Ctrl+C), lalu tempel.';
 }
 
 function applyCalendar(data){

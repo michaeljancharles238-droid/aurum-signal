@@ -262,6 +262,31 @@ tailwind.config = {
     <details class="card p-4">
       <summary class="font-display text-lg font-semibold cursor-pointer">Statistik Pergerakan per Event <span class="text-muted text-xs font-body">(bisa diedit — sesuaikan dengan datamu)</span></summary>
       <p class="text-xs text-muted mt-2 mb-3">Angka di bawah adalah estimasi rata-rata pergerakan XAU/USD (dalam USD/oz) pada 30–60 menit pertama setelah rilis. Nanti di Tahap 2, database Spreadsheet-mu akan menggantikan estimasi ini dengan data aktual.</p>
+
+      <!-- Kalkulator Pintar -->
+      <div class="p-3 rounded-lg border border-line mb-4" style="background:var(--surface2)">
+        <div class="text-xs font-semibold uppercase tracking-widest text-gold mb-2">⚡ Kalkulator Pintar — $ ⇄ Pips ⇄ Profit</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label class="text-[11px] text-muted uppercase tracking-wider">Dolar ($/oz)</label>
+            <input id="calcUsd" inputmode="decimal" placeholder="cth: 3.5">
+          </div>
+          <div>
+            <label class="text-[11px] text-muted uppercase tracking-wider">Pips</label>
+            <input id="calcPips" inputmode="decimal" placeholder="cth: 35">
+          </div>
+          <div>
+            <label class="text-[11px] text-muted uppercase tracking-wider">Lot (XAU)</label>
+            <input id="calcLot" value="0.01" inputmode="decimal">
+          </div>
+          <div class="flex flex-col justify-end">
+            <div class="text-[11px] text-muted uppercase tracking-wider">Estimasi P/L</div>
+            <div id="calcProfit" class="font-mono text-lg font-semibold text-gold">—</div>
+          </div>
+        </div>
+        <div class="text-[11px] text-muted mt-2">Rumus: <span class="font-mono">$0.10 = 1 pip</span> · 1 lot XAU = 100 oz → pergerakan $1 = $100/lot (0.01 lot = $1). Isi salah satu kolom, sisanya terhitung otomatis.</div>
+      </div>
+
       <div id="statsEditor" class="grid gap-2"></div>
     </details>
   </section>
@@ -865,13 +890,41 @@ function renderStatsEditor(){
         <input value="${s.move[0]}" data-i="${i}" data-f="0" class="stat-in" style="width:64px" inputmode="decimal">
         <span class="text-muted">–</span>
         <input value="${s.move[1]}" data-i="${i}" data-f="1" class="stat-in" style="width:64px" inputmode="decimal">
+        <span class="text-[11px] text-gold font-mono whitespace-nowrap">= ${toPips(s.move[0])}–${toPips(s.move[1])} pips</span>
       </div>`;
   });
   box.querySelectorAll('.stat-in').forEach(inp => inp.onchange = () => {
     const v = parseFloat(inp.value.replace(',', '.'));
-    if (!isNaN(v)) { STATS[+inp.dataset.i].move[+inp.dataset.f] = v; safeStore.set('aurum_stats', STATS); }
+    if (!isNaN(v)) {
+      STATS[+inp.dataset.i].move[+inp.dataset.f] = v;
+      safeStore.set('aurum_stats', STATS);
+      renderStatsEditor(); // segarkan monitor pip
+    }
   });
 }
+
+/* ================= KALKULATOR PINTAR $ ⇄ PIPS ⇄ PROFIT ================= */
+function updateProfit(){
+  const usd = parseFloat(($('calcUsd').value || '').replace(',', '.'));
+  const lot = parseFloat(($('calcLot').value || '').replace(',', '.'));
+  if (!isNaN(usd) && !isNaN(lot) && lot > 0){
+    const pl = usd * 100 * lot; // 1 lot XAU = 100 oz
+    $('calcProfit').textContent = '$' + pl.toFixed(2);
+  } else {
+    $('calcProfit').textContent = '—';
+  }
+}
+$('calcUsd').oninput = () => {
+  const usd = parseFloat(($('calcUsd').value || '').replace(',', '.'));
+  $('calcPips').value = isNaN(usd) ? '' : Math.round(usd * 10);
+  updateProfit();
+};
+$('calcPips').oninput = () => {
+  const pips = parseFloat(($('calcPips').value || '').replace(',', '.'));
+  $('calcUsd').value = isNaN(pips) ? '' : +(pips / 10).toFixed(2);
+  updateProfit();
+};
+$('calcLot').oninput = updateProfit;
 
 /* ================= EVENT BINDING ================= */
 $('fetchBtn').onclick = fetchCalendar;

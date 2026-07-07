@@ -347,7 +347,12 @@ let STATS = safeStore.get('aurum_stats') || DEFAULT_STATS;
 
 function matchStat(title){
   const t = (title||'').toLowerCase();
-  for (const s of STATS) if (s.keys && s.keys.some(k => t.includes(k))) return s;
+  // Prioritas 1: event naratif (pidato/testimoni) — cek dulu sebelum kata kunci numerik lain,
+  // karena judul seperti "FOMC Member Bowman Speaks" mengandung "fomc" DAN "speaks" sekaligus.
+  const speechStat = STATS.find(s => s.manual);
+  if (speechStat && speechStat.keys.some(k => t.includes(k))) return speechStat;
+  // Prioritas 2: profil numerik lain
+  for (const s of STATS) if (!s.manual && s.keys && s.keys.some(k => t.includes(k))) return s;
   return STATS.find(s => s.id === 'other');
 }
 

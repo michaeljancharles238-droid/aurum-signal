@@ -332,6 +332,29 @@ tailwind.config = {
       <div id="statsEditor" class="grid gap-2"></div>
     </details>
   </section>
+
+  <!-- Sesi Pasar & Proteksi -->
+  <section class="card p-4 self-start">
+    <h2 class="font-display text-lg font-semibold mb-1">Sesi Pasar & Proteksi</h2>
+    <p class="text-xs text-muted mb-3">Deteksi otomatis sesi aktif (termasuk penyesuaian musim panas/dingin) + penilaian risiko jam ini untuk XAU/USD.</p>
+
+    <!-- Lampu proteksi -->
+    <div id="riskBanner" class="p-3 rounded-lg mb-3 text-sm font-semibold border" style="border-color:var(--line)">
+      <div class="flex items-center gap-2">
+        <span id="riskDot" class="w-3 h-3 rounded-full inline-block shrink-0"></span>
+        <span id="riskTitle">Memuat…</span>
+      </div>
+      <div id="riskDesc" class="text-xs font-normal mt-1 leading-relaxed" style="color:var(--muted)"></div>
+    </div>
+
+    <div id="sessionList" class="flex flex-col gap-1.5"></div>
+
+    <div class="text-[11px] text-muted mt-3 leading-relaxed">
+      Panduan umum XAU/USD: likuiditas emas terbaik saat <b>London–New York overlap</b>; sesi Asia cenderung range sempit
+      dan rawan fake breakout; <b>rollover harian</b> (tutup NY) dan <b>jelang tutup pekan</b> adalah zona spread melebar —
+      bukan waktu untuk membuka posisi baru.
+    </div>
+  </section>
 </main>
 
 <!-- ============ JURNAL ============ -->
@@ -592,6 +615,10 @@ $('aiBtn').onclick = async () => {
 
 let lastAnalysis = null;
 $('analyzeBtn').onclick = () => {
+  if (window.__marketRisk === 'red'){
+    const ok = confirm('⚠ PROTEKSI AKTIF: kondisi pasar saat ini berisiko tinggi (lihat panel Sesi Pasar & Proteksi).\n\nLanjutkan analisis hanya jika ini memang bagian dari rencana news trading-mu.\n\nTetap lanjut?');
+    if (!ok) return;
+  }
   const title = $('evTitle').value.trim() || 'Event manual';
   const stat = matchStat(title);
   const price = parseFloat(($('xauPrice').value || '').replace(',', '.'));
@@ -1026,12 +1053,16 @@ function renderStatsEditor(){
       </div>`;
   });
   box.querySelectorAll('.stat-in').forEach(inp => inp.onchange = () => {
-    const v = parseFloat(inp.value.replace(',', '.'));
-    if (!isNaN(v)) {
-      STATS[+inp.dataset.i].move[+inp.dataset.f] = v;
-      safeStore.set('aurum_stats', STATS);
-      renderStatsEditor(); // segarkan monitor pip
+    let v = parseFloat(inp.value.replace(',', '.'));
+    if (isNaN(v) || v < 0){ renderStatsEditor(); return; } // batalkan input tidak valid, kembalikan tampilan lama
+    if (v > 200){ // $200/oz = 2000 pips sekali gerak — di luar batas wajar untuk data ekonomi biasa, kemungkinan salah ketik
+      alert('Nilai $' + v + ' terlalu besar untuk pergerakan wajar satu event (setara ' + toPips(v) + ' pips). Dibatalkan — cek kembali angkanya.');
+      renderStatsEditor();
+      return;
     }
+    STATS[+inp.dataset.i].move[+inp.dataset.f] = v;
+    safeStore.set('aurum_stats', STATS);
+    renderStatsEditor();
   });
 }
 
@@ -1083,6 +1114,118 @@ renderCalendar();
 renderJournal();
 renderStatsEditor();
 if (!calendar.length) fetchCalendar();
+
+/* ================= SESI PASAR & PROTEKSI ================= */
+const SESSIONS = [
+  { id:'sydney', name:'Sydney',   tz:'Australia/Sydney',  open: 7*60,  close: 16*60,    note:'Pembuka hari — volume tipis untuk emas' },
+  { id:'tokyo',  name:'Tokyo',    tz:'Asia/Tokyo',        open: 9*60,  close: 18*60,    note:'Sesi Asia — range sempit, rawan fake breakout' },
+  { id:'london', name:'London',   tz:'Europe/London',     open: 8*60,  close: 16*60+30, note:'Volatilitas Eropa — arah harian mulai terbentuk' },
+  { id:'ny',     name:'New York', tz:'America/New_York',  open: 8*60,  close: 17*60,    note:'Rilis data AS & volume terbesar emas' }
+];
+
+function tzNow(tz){
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit', weekday:'short', hour12:false }).formatToParts(new Date());
+  const get = t => (parts.find(p => p.type === t) || {}).value;
+  return { min: parseInt(get('hour'),10)*60 + parseInt(get('minute'),10), wd: get('weekday') };
+}
+
+function toWibClock(tz, minOfDay){
+  // konversi jam lokal sesi → tampilan WIB memakai selisih offset saat ini (otomatis ikut DST)
+  const wib = tzNow('Asia/Jakarta').min, loc = tzNow(tz).min;
+  const diff = ((wib - loc) % 1440 + 1440) % 1440;
+  const m = (minOfDay + diff) % 1440;
+  return String(Math.floor(m/60)).padStart(2,'0') + '.' + String(m%60).padStart(2,'0');
+}
+
+window.__marketRisk = 'green';
+
+function marketTick(){
+  const now = new Date();
+  const ny = tzNow('America/New_York');
+
+  const states = SESSIONS.map(s => {
+    const t = tzNow(s.tz);
+    const weekend = (t.wd === 'Sat') || (t.wd === 'Sun');
+    return Object.assign({}, s, { active: !weekend && t.min >= s.open && t.min < s.close });
+  });
+
+  // pasar forex tutup: Jumat 17:00 NY s/d Minggu 17:00 NY
+  const marketClosed = (ny.wd === 'Fri' && ny.min >= 17*60) || ny.wd === 'Sat' || (ny.wd === 'Sun' && ny.min < 17*60);
+  const rollover = !marketClosed && ny.min >= 16*60+50 && ny.min < 17*60+20;
+  const preWeekend = ny.wd === 'Fri' && ny.min >= 12*60 && ny.min < 17*60;
+
+  // jarak ke event USD high-impact terdekat (menit; negatif = baru saja lewat)
+  let minToEvent = Infinity, eventName = '';
+  calendar.forEach(e => {
+    if (e.country !== 'USD' || e.impact !== 'High') return;
+    const diffMin = (new Date(e.date) - now) / 60000;
+    if (diffMin > -15 && diffMin < minToEvent){ minToEvent = diffMin; eventName = e.title; }
+  });
+
+  const london = states.find(s => s.id === 'london').active;
+  const nyAct  = states.find(s => s.id === 'ny').active;
+  const asiaOnly = !london && !nyAct && (states.find(s=>s.id==='tokyo').active || states.find(s=>s.id==='sydney').active);
+
+  // ===== penilaian risiko: yang paling protektif diprioritaskan =====
+  let level, title, desc;
+  if (marketClosed){
+    level='red'; title='PASAR TUTUP (akhir pekan)';
+    desc='Forex tutup Sabtu–Minggu (17.00 waktu New York). Tidak ada eksekusi — waktu terbaik untuk mengisi jurnal & review mingguan.';
+  } else if (rollover){
+    level='red'; title='ROLLOVER HARIAN — JANGAN ENTRY';
+    desc='Pergantian hari perdagangan (sekitar tutup New York). Spread melebar drastis, likuiditas hilang sesaat. Tunggu ±30 menit.';
+  } else if (minToEvent >= -15 && minToEvent <= 15){
+    level='red'; title='ZONA RILIS: ' + eventName;
+    desc='Dalam jendela ±15 menit rilis berita high-impact. Spread & slippage ekstrem. HANYA entry sesuai hasil analisis deviasi + checklist — jangan buka posisi teknikal baru.';
+  } else if (minToEvent > 15 && minToEvent <= 60){
+    level='yellow'; title=Math.round(minToEvent) + ' MENIT MENUJU ' + eventName;
+    desc='Hindari posisi teknikal baru — pasar sering bergerak menipu (positioning) menjelang rilis. Gunakan waktu ini untuk menyiapkan analisis deviasi.';
+  } else if (preWeekend){
+    level='yellow'; title='JELANG TUTUP PEKAN';
+    desc='Beberapa jam menuju penutupan Jumat. Risiko gap saat pembukaan Senin — pertimbangkan menutup posisi atau perkecil ukuran, hindari menahan posisi besar melewati weekend.';
+  } else if (london && nyAct){
+    level='green'; title='LONDON–NEW YORK OVERLAP — SESI TERBAIK';
+    desc='Likuiditas & volume tertinggi untuk emas, spread paling tipis. Jendela ideal untuk eksekusi — tetap disiplin pada checklist chart.';
+  } else if (london){
+    level='green'; title='SESI LONDON AKTIF';
+    desc='Volatilitas sehat, arah harian mulai terbentuk. Layak trading dengan konfirmasi chart.';
+  } else if (nyAct){
+    level='yellow'; title='SESI NEW YORK (SORE) — LONDON SUDAH TUTUP';
+    desc='Likuiditas menurun bertahap, pergerakan bisa whipsaw. Perkecil target & ukuran posisi.';
+  } else if (asiaOnly){
+    level='yellow'; title='SESI ASIA — LIKUIDITAS RENDAH UNTUK EMAS';
+    desc='Range biasanya sempit, breakout sering palsu. Kalau tetap trading: target kecil, hindari strategi breakout, waspada spread.';
+  } else {
+    level='yellow'; title='DI ANTARA SESI';
+    desc='Tidak ada pusat keuangan besar yang aktif penuh. Likuiditas tipis — bukan jam ideal untuk posisi baru.';
+  }
+
+  window.__marketRisk = level;
+
+  const colors = { green:'var(--buy)', yellow:'var(--gold)', red:'var(--sell)' };
+  $('riskDot').style.background = colors[level];
+  $('riskDot').classList.toggle('pulse-dot', level !== 'green');
+  $('riskTitle').textContent = title;
+  $('riskTitle').style.color = colors[level];
+  $('riskDesc').textContent = desc;
+  $('riskBanner').style.borderColor = colors[level];
+
+  const list = $('sessionList'); list.innerHTML = '';
+  states.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 text-xs px-2.5 py-2 rounded-lg border border-line';
+    row.style.background = 'var(--surface2)';
+    row.style.opacity = s.active ? '1' : '.5';
+    row.innerHTML =
+      '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + (s.active ? 'var(--buy)' : 'var(--muted)') + '"></span>' +
+      '<span class="font-semibold w-20">' + s.name + '</span>' +
+      '<span class="font-mono text-muted whitespace-nowrap">' + toWibClock(s.tz, s.open) + '–' + toWibClock(s.tz, s.close) + ' WIB</span>' +
+      '<span class="text-muted flex-1 text-right truncate hidden sm:block">' + (s.active ? s.note : 'tutup') + '</span>';
+    list.appendChild(row);
+  });
+}
+marketTick();
+setInterval(marketTick, 30000);
 </script>
 </body>
 </html>

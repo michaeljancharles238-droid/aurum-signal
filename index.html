@@ -258,6 +258,48 @@ tailwind.config = {
       <button id="saveJournal" class="btn mt-4">✎ Simpan ke Jurnal</button>
     </div>
 
+    <!-- Pemantauan Sesi Live -->
+    <div id="sessionCard" class="card p-4 hidden">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Pemantauan Sesi Live</h2>
+        <div id="sessTimer" class="font-mono text-sm text-gold">00:00</div>
+      </div>
+      <p class="text-xs text-muted mb-3">
+        Fase spike (0–3 menit) biasanya whipsaw dua arah — jangan buru-buru simpulkan.
+        Fase follow-through (3–30 menit) baru mencerminkan arah asli. Setelah ±60 menit, biasanya sudah kembali ke pola teknikal biasa.
+      </p>
+
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div class="p-2.5 rounded-lg border border-line" style="background:var(--surface2)">
+          <div class="text-[10px] uppercase tracking-widest text-muted">Tertinggi (naik)</div>
+          <div id="sessHigh" class="font-mono text-lg font-semibold" style="color:var(--buy)">—</div>
+        </div>
+        <div class="p-2.5 rounded-lg border border-line" style="background:var(--surface2)">
+          <div class="text-[10px] uppercase tracking-widest text-muted">Terendah (turun)</div>
+          <div id="sessLow" class="font-mono text-lg font-semibold" style="color:var(--sell)">—</div>
+        </div>
+        <div class="p-2.5 rounded-lg border border-line col-span-2 md:col-span-1" style="background:var(--surface2)">
+          <div class="text-[10px] uppercase tracking-widest text-muted">Total rentang (swing)</div>
+          <div id="sessRange" class="font-mono text-lg font-semibold text-gold">—</div>
+        </div>
+      </div>
+
+      <div class="flex gap-2 flex-wrap items-end mb-2">
+        <div class="flex-1 min-w-[160px]">
+          <label class="text-[11px] text-muted uppercase tracking-wider">Harga XAU sekarang</label>
+          <input id="sessPrice" inputmode="decimal" placeholder="cth: 4103.20">
+        </div>
+        <button id="sessLog" class="btn btn-gold">📍 Catat Snapshot</button>
+        <button id="sessEnd" class="btn">⏹ Tandai Sesi Selesai</button>
+      </div>
+
+      <div id="sessSuggestion" class="hidden text-xs p-2.5 rounded-lg border border-line mb-2" style="background:var(--surface2)"></div>
+
+      <div id="sessLogList" class="flex flex-col gap-1 max-h-[180px] overflow-y-auto text-xs font-mono"></div>
+
+      <div id="sessSummary" class="hidden mt-3 p-3 rounded-lg border border-line text-xs leading-relaxed" style="background:var(--surface2)"></div>
+    </div>
+
     <!-- Statistik pergerakan (editable) -->
     <details class="card p-4">
       <summary class="font-display text-lg font-semibold cursor-pointer">Statistik Pergerakan per Event <span class="text-muted text-xs font-body">(bisa diedit — sesuaikan dengan datamu)</span></summary>
@@ -635,6 +677,96 @@ $('analyzeBtn').onclick = () => {
 
   lastAnalysis = { time: new Date().toISOString(), title, forecast: $('evForecast').value, actual: stat.manual ? devText : $('evActual').value, bias, strength, levels };
   renderChecklist(bias, levels);
+  if (levels) startSession(levels.entry, bias); else $('sessionCard').classList.add('hidden');
+};
+
+/* ================= PEMANTAUAN SESI LIVE ================= */
+let session = null; // { entryPrice, bias, startTime, log:[{t,price,pip}], high, low }
+let sessTimerHandle = null;
+
+function startSession(entryPrice, bias){
+  session = { entryPrice, bias, startTime: Date.now(), log: [], high: 0, low: 0 };
+  $('sessionCard').classList.remove('hidden');
+  $('sessHigh').textContent = '—'; $('sessLow').textContent = '—'; $('sessRange').textContent = '—';
+  $('sessLogList').innerHTML = '';
+  $('sessSuggestion').classList.add('hidden');
+  $('sessSummary').classList.add('hidden');
+  $('sessPrice').value = '';
+  clearInterval(sessTimerHandle);
+  sessTimerHandle = setInterval(updateSessTimer, 1000);
+  updateSessTimer();
+}
+
+function updateSessTimer(){
+  if (!session) return;
+  const sec = Math.floor((Date.now() - session.startTime) / 1000);
+  const m = String(Math.floor(sec/60)).padStart(2,'0'), s = String(sec%60).padStart(2,'0');
+  $('sessTimer').textContent = `${m}:${s}`;
+}
+
+$('sessLog').onclick = () => {
+  if (!session) return;
+  const price = parseFloat(($('sessPrice').value || '').replace(',', '.'));
+  if (!price || price <= 0){ alert('Isi dulu harga XAU saat ini.'); return; }
+
+  const diffUsd = price - session.entryPrice;
+  const pip = toPips(diffUsd); // + = naik dari entry, - = turun dari entry
+  const elapsedSec = Math.floor((Date.now() - session.startTime) / 1000);
+
+  session.log.push({ t: elapsedSec, price, pip });
+  session.high = Math.max(session.high, pip);
+  session.low = Math.min(session.low, pip);
+
+  $('sessHigh').textContent = `+${session.high} pips`;
+  $('sessLow').textContent = `${session.low} pips`;
+  $('sessRange').textContent = `${session.high - session.low} pips`;
+
+  renderSessLog();
+  checkCompression();
+  $('sessPrice').value = '';
+};
+
+function renderSessLog(){
+  const list = $('sessLogList'); list.innerHTML = '';
+  session.log.slice().reverse().forEach(entry => {
+    const m = String(Math.floor(entry.t/60)).padStart(2,'0'), s = String(entry.t%60).padStart(2,'0');
+    const col = entry.pip > 0 ? 'var(--buy)' : entry.pip < 0 ? 'var(--sell)' : 'var(--muted)';
+    const row = document.createElement('div');
+    row.className = 'flex justify-between px-2 py-1 rounded';
+    row.style.background = 'var(--surface2)';
+    row.innerHTML = `<span class="text-muted">${m}:${s}</span><span>${fmtUsd(entry.price)}</span><span style="color:${col}">${entry.pip > 0 ? '+' : ''}${entry.pip} pips</span>`;
+    list.appendChild(row);
+  });
+}
+
+function checkCompression(){
+  const last3 = session.log.slice(-3);
+  const box = $('sessSuggestion');
+  if (last3.length < 3){ box.classList.add('hidden'); return; }
+  const pips = last3.map(e => e.pip);
+  const range = Math.max(...pips) - Math.min(...pips);
+  const elapsedMin = Math.floor((Date.now() - session.startTime) / 60000);
+  if (range <= 5){
+    box.textContent = `💤 Volatilitas menyempit (3 catatan terakhir dalam rentang ${range} pips) — sesi kemungkinan sudah mereda.`;
+    box.classList.remove('hidden');
+  } else if (elapsedMin >= 60){
+    box.textContent = `⏱ Sudah lewat 60 menit dari rilis — biasanya reaksi berita sudah selesai, pasar kembali ke pola teknikal biasa.`;
+    box.classList.remove('hidden');
+  } else {
+    box.classList.add('hidden');
+  }
+}
+
+$('sessEnd').onclick = () => {
+  if (!session || !session.log.length){ alert('Catat minimal satu snapshot harga dulu sebelum mengakhiri sesi.'); return; }
+  clearInterval(sessTimerHandle);
+  const elapsedMin = Math.floor((Date.now() - session.startTime) / 60000);
+  const summary = `Sesi berlangsung ${elapsedMin} menit · Tertinggi +${session.high} pips · Terendah ${session.low} pips · Total swing ${session.high - session.low} pips.`;
+  $('sessSummary').innerHTML =
+    `<b class="text-gold">Ringkasan Sesi (salin ke kolom Catatan di Sheet):</b><br>${summary}`;
+  $('sessSummary').classList.remove('hidden');
+  // simpan ke lastAnalysis supaya ikut tersalin kalau user klik "Simpan ke Jurnal" setelah ini
+  if (lastAnalysis) lastAnalysis.sessionSummary = summary;
 };
 
 /* ============ CHECKLIST KONFIRMASI CHART ============ */

@@ -212,6 +212,25 @@ tailwind.config = {
       <div id="tvWrap" class="hidden rounded-lg overflow-hidden border border-line" style="height:430px"></div>
     </div>
 
+    <!-- Chart Analisis: S/R otomatis + level analisis -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Chart Analisis <span class="text-muted text-xs font-body">(S/R otomatis + level Entry/TP/SL)</span></h2>
+        <div class="flex gap-2 items-center">
+          <button class="btn lw-tf" data-tf="5m">M5</button>
+          <button class="btn lw-tf" data-tf="15m">M15</button>
+          <button class="btn lw-tf" data-tf="60m">H1</button>
+          <button id="lwLoad" class="btn btn-gold">▶ Muat Chart</button>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-2">
+        <span style="color:var(--sell)">━ ━ Resistance</span> · <span style="color:var(--buy)">━ ━ Support</span> (dideteksi otomatis dari swing high/low, angka di label = berapa kali diuji) ·
+        <span class="text-gold">━ ━ Pivot harian</span> · garis solid = Entry/TP/SL dari analisis terakhirmu.
+      </p>
+      <div id="lwStatus" class="text-xs text-muted mb-2">Belum dimuat. Data harga dari Yahoo Finance (spot XAU/USD, cadangan futures GC=F) — bisa tertinggal 1–2 menit dari broker; garisnya untuk panduan, konfirmasi akhir tetap di MT4/MT5.</div>
+      <div id="lwWrap" class="rounded-lg border border-line hidden" style="height:430px"></div>
+    </div>
+
     <!-- Hasil -->
     <div id="resultCard" class="card p-4 hidden">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
@@ -722,6 +741,7 @@ $('analyzeBtn').onclick = () => {
   lastAnalysis = { time: new Date().toISOString(), title, forecast: $('evForecast').value, actual: stat.manual ? devText : $('evActual').value, bias, strength, levels };
   renderChecklist(bias, levels);
   if (levels) startSession(levels.entry, bias); else $('sessionCard').classList.add('hidden');
+  drawAnalysisLevels(); // sinkronkan garis Entry/TP/SL ke Chart Analisis bila sedang terbuka
 };
 
 /* ================= PEMANTAUAN SESI LIVE ================= */
@@ -1010,6 +1030,166 @@ $('tvToggle').onclick = () => {
   else loadTV();
 };
 document.querySelectorAll('.tv-int').forEach(b => b.onclick = () => { tvInterval = b.dataset.int; loadTV(); });
+
+/* ================= CHART ANALISIS (S/R OTOMATIS) ================= */
+let lwChart = null, lwSeries = null, lwTf = '5m', lwAnalysisLines = [];
+
+async function ensureLW(){
+  if (window.LightweightCharts) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/lightweight-charts/4.1.3/lightweight-charts.standalone.production.min.js';
+    s.onload = resolve; s.onerror = () => reject(new Error('Gagal memuat library chart'));
+    document.head.appendChild(s);
+  });
+}
+
+async function fetchCandles(tf){
+  const map = { '5m':{i:'5m', r:'3d'}, '15m':{i:'15m', r:'7d'}, '60m':{i:'60m', r:'1mo'} };
+  const cfg = map[tf];
+  const symbols = ['XAUUSD%3DX', 'GC%3DF'];
+  for (const sym of symbols){
+    const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + sym + '?interval=' + cfg.i + '&range=' + cfg.r;
+    for (const wrap of PROXIES){
+      try {
+        const res = await fetch(wrap(url), { cache:'no-store' });
+        if (!res.ok) throw 0;
+        let j = await res.json();
+        if (j && j.contents) j = JSON.parse(j.contents);
+        const r0 = j.chart && j.chart.result && j.chart.result[0];
+        if (!r0 || !r0.timestamp) throw 0;
+        const q = r0.indicators.quote[0];
+        const out = [];
+        r0.timestamp.forEach((t, idx) => {
+          if (q.open[idx] != null && q.close[idx] != null)
+            out.push({ time: t + 7*3600, open:q.open[idx], high:q.high[idx], low:q.low[idx], close:q.close[idx] }); // +7 jam agar sumbu waktu tampil WIB
+        });
+        if (out.length > 50) return { candles: out, sym: decodeURIComponent(sym) };
+      } catch(e){ /* coba jalur berikutnya */ }
+    }
+  }
+  throw new Error('Semua sumber data candle gagal (Yahoo/proxy). Coba lagi sebentar lagi.');
+}
+
+// Deteksi S/R: fractal swing high/low lalu dikelompokkan; skor = berapa kali level diuji
+function findSR(candles, price){
+  const k = 3, piv = [];
+  for (let i = k; i < candles.length - k; i++){
+    let hi = true, lo = true;
+    for (let j = 1; j <= k; j++){
+      if (candles[i].high < candles[i-j].high || candles[i].high < candles[i+j].high) hi = false;
+      if (candles[i].low  > candles[i-j].low  || candles[i].low  > candles[i+j].low ) lo = false;
+    }
+    if (hi) piv.push(candles[i].high);
+    if (lo) piv.push(candles[i].low);
+  }
+  const tol = price * 0.0012; // toleransi klaster ±0.12% (≈ $5 di harga 4100)
+  const clusters = [];
+  piv.forEach(p => {
+    const c = clusters.find(c => Math.abs(c.p - p) < tol);
+    if (c){ c.n++; c.p = (c.p * (c.n - 1) + p) / c.n; } else clusters.push({ p, n: 1 });
+  });
+  const strong = clusters.filter(c => c.n >= 2); // minimal diuji 2x baru dianggap level
+  return {
+    res: strong.filter(c => c.p > price).sort((a,b) => a.p - b.p).slice(0, 3),
+    sup: strong.filter(c => c.p < price).sort((a,b) => b.p - a.p).slice(0, 3)
+  };
+}
+
+// Pivot harian klasik dari H/L/C hari penuh sebelumnya
+function dailyPivot(candles){
+  const byDay = {};
+  candles.forEach(c => {
+    const d = new Date((c.time - 7*3600) * 1000).toISOString().slice(0,10);
+    (byDay[d] ||= []).push(c);
+  });
+  const days = Object.keys(byDay).sort();
+  if (days.length < 2) return null;
+  const prev = byDay[days[days.length - 2]];
+  const H = Math.max(...prev.map(c => c.high));
+  const L = Math.min(...prev.map(c => c.low));
+  const C = prev[prev.length - 1].close;
+  const P = (H + L + C) / 3;
+  return { P, R1: 2*P - L, S1: 2*P - H };
+}
+
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+async function loadAnalysisChart(){
+  $('lwStatus').textContent = 'Memuat data candle…';
+  $('lwLoad').disabled = true;
+  try {
+    await ensureLW();
+    const { candles, sym } = await fetchCandles(lwTf);
+    const price = candles[candles.length - 1].close;
+
+    $('lwWrap').classList.remove('hidden');
+    if (lwChart){ lwChart.remove(); lwChart = null; }
+    lwAnalysisLines = [];
+    const buy = cssVar('--buy'), sell = cssVar('--sell'), gold = cssVar('--gold'), muted = cssVar('--muted');
+
+    lwChart = LightweightCharts.createChart($('lwWrap'), {
+      autoSize: true,
+      layout: { background: { color: 'transparent' }, textColor: muted, fontFamily: 'IBM Plex Mono' },
+      grid: { vertLines: { color: 'rgba(140,125,95,.10)' }, horzLines: { color: 'rgba(140,125,95,.10)' } },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: cssVar('--line') },
+      rightPriceScale: { borderColor: cssVar('--line') }
+    });
+    lwSeries = lwChart.addCandlestickSeries({
+      upColor: buy, downColor: sell, wickUpColor: buy, wickDownColor: sell, borderVisible: false
+    });
+    lwSeries.setData(candles);
+    lwChart.timeScale().fitContent();
+
+    const addLine = (p, color, title, solid) => lwSeries.createPriceLine({
+      price: p, color, lineWidth: solid ? 2 : 1,
+      lineStyle: solid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title
+    });
+
+    // S/R teknikal
+    const sr = findSR(candles, price);
+    sr.res.forEach((c, i) => addLine(c.p, sell, 'R' + (i+1) + ' (' + c.n + 'x uji)', false));
+    sr.sup.forEach((c, i) => addLine(c.p, buy,  'S' + (i+1) + ' (' + c.n + 'x uji)', false));
+    const pv = dailyPivot(candles);
+    if (pv){
+      addLine(pv.P, gold, 'Pivot', false);
+      addLine(pv.R1, gold, 'R1 pivot', false);
+      addLine(pv.S1, gold, 'S1 pivot', false);
+    }
+
+    // Level fundamental dari analisis terakhir
+    drawAnalysisLevels();
+
+    // bantu isi harga XAU jika kosong
+    if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
+
+    $('lwStatus').textContent = '✓ ' + candles.length + ' candle (' + sym + ', ' + lwTf + ') · harga terakhir ' + price.toFixed(2) +
+      ' · S/R dari swing yang diuji ≥2x · sumber Yahoo Finance (delay ±1–2 mnt)';
+    document.querySelectorAll('.lw-tf').forEach(b => b.classList.toggle('btn-gold', b.dataset.tf === lwTf));
+  } catch(e){
+    $('lwStatus').textContent = '⚠ ' + e.message;
+  } finally {
+    $('lwLoad').disabled = false;
+  }
+}
+
+function drawAnalysisLevels(){
+  if (!lwSeries || !lastAnalysis || !lastAnalysis.levels) return;
+  lwAnalysisLines.forEach(l => { try { lwSeries.removePriceLine(l); } catch(e){} });
+  lwAnalysisLines = [];
+  const L = lastAnalysis.levels;
+  const mk = (p, color, title) => lwAnalysisLines.push(lwSeries.createPriceLine({
+    price: p, color, lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title
+  }));
+  mk(L.entry, cssVar('--gold'), 'ENTRY');
+  mk(L.tp1,   cssVar('--buy'),  'TP1');
+  mk(L.tp2,   cssVar('--buy'),  'TP2');
+  mk(L.sl,    cssVar('--sell'), 'SL');
+}
+
+$('lwLoad').onclick = loadAnalysisChart;
+document.querySelectorAll('.lw-tf').forEach(b => b.onclick = () => { lwTf = b.dataset.tf; loadAnalysisChart(); });
 
 /* ================= LAMPIRAN SCREENSHOT ================= */
 let pendingShot = null;

@@ -216,11 +216,12 @@ tailwind.config = {
     <div class="card p-4">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
         <h2 class="font-display text-lg font-semibold">Chart Analisis <span class="text-muted text-xs font-body">(S/R otomatis + level Entry/TP/SL)</span></h2>
-        <div class="flex gap-2 items-center">
+        <div class="flex gap-2 items-center flex-wrap">
           <button class="btn lw-tf" data-tf="5m">M5</button>
           <button class="btn lw-tf" data-tf="15m">M15</button>
           <button class="btn lw-tf" data-tf="60m">H1</button>
           <button id="lwLoad" class="btn btn-gold">▶ Muat Chart</button>
+          <button id="lwCalib" class="btn" title="Geser seluruh chart & S/R agar sejajar dengan harga broker (isi kolom 'Harga XAU saat ini' dulu)">⇄ Kalibrasi</button>
         </div>
       </div>
       <p class="text-xs text-muted mb-2">
@@ -1032,7 +1033,7 @@ $('tvToggle').onclick = () => {
 document.querySelectorAll('.tv-int').forEach(b => b.onclick = () => { tvInterval = b.dataset.int; loadTV(); });
 
 /* ================= CHART ANALISIS (S/R OTOMATIS) ================= */
-let lwChart = null, lwSeries = null, lwTf = '5m', lwAnalysisLines = [];
+let lwChart = null, lwSeries = null, lwTf = '5m', lwAnalysisLines = [], lwRaw = null, lwOffset = 0;
 
 async function ensureLW(){
   if (window.LightweightCharts) return;
@@ -1045,44 +1046,72 @@ async function ensureLW(){
     try {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = url;
-        s.onload = resolve; s.onerror = () => reject(new Error('gagal: ' + url));
+        s.src = url; s.onload = resolve; s.onerror = () => reject(new Error('gagal: ' + url));
         document.head.appendChild(s);
       });
       if (window.LightweightCharts) return;
-    } catch(e){ /* coba CDN berikutnya */ }
+    } catch(e){}
   }
-  throw new Error('Gagal memuat library chart dari semua CDN — cek koneksi/adblocker.');
+  throw new Error('Gagal memuat library chart dari semua CDN \u2014 cek koneksi/adblocker.');
+}
+
+async function fetchYahoo(sym, interval, range){
+  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?interval=' + interval + '&range=' + range;
+  for (const wrap of PROXIES){
+    try {
+      const res = await fetch(wrap(url), { cache:'no-store' });
+      if (!res.ok) throw 0;
+      let j = await res.json();
+      if (j && j.contents) j = JSON.parse(j.contents);
+      const r0 = j.chart && j.chart.result && j.chart.result[0];
+      if (!r0 || !r0.timestamp) throw 0;
+      const q = r0.indicators.quote[0];
+      const out = [];
+      r0.timestamp.forEach((t, i) => {
+        if (q.open[i] != null && q.close[i] != null)
+          out.push({ time: t, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
+      });
+      if (out.length > 50) return out;
+    } catch(e){}
+  }
+  return null;
+}
+
+async function fetchBinancePAXG(interval){
+  try {
+    const res = await fetch('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=' + interval + '&limit=600', { cache:'no-store' });
+    if (!res.ok) return null;
+    const arr = await res.json();
+    if (!Array.isArray(arr) || arr.length < 50) return null;
+    return arr.map(k => ({ time: Math.floor(k[0]/1000), open:+k[1], high:+k[2], low:+k[3], close:+k[4] }));
+  } catch(e){ return null; }
 }
 
 async function fetchCandles(tf){
-  const map = { '5m':{i:'5m', r:'3d'}, '15m':{i:'15m', r:'7d'}, '60m':{i:'60m', r:'1mo'} };
-  const cfg = map[tf];
-  const symbols = ['XAUUSD%3DX', 'GC%3DF'];
-  for (const sym of symbols){
-    const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + sym + '?interval=' + cfg.i + '&range=' + cfg.r;
-    for (const wrap of PROXIES){
-      try {
-        const res = await fetch(wrap(url), { cache:'no-store' });
-        if (!res.ok) throw 0;
-        let j = await res.json();
-        if (j && j.contents) j = JSON.parse(j.contents);
-        const r0 = j.chart && j.chart.result && j.chart.result[0];
-        if (!r0 || !r0.timestamp) throw 0;
-        const q = r0.indicators.quote[0];
-        const out = [];
-        r0.timestamp.forEach((t, idx) => {
-          if (q.open[idx] != null && q.close[idx] != null)
-            out.push({ time: t + 7*3600, open:q.open[idx], high:q.high[idx], low:q.low[idx], close:q.close[idx] }); // +7 jam agar sumbu waktu tampil WIB
-        });
-        if (out.length > 50) return { candles: out, sym: decodeURIComponent(sym) };
-      } catch(e){ /* coba jalur berikutnya */ }
-    }
+  const yCfg = { '5m':{i:'5m', r:'3d'}, '15m':{i:'15m', r:'7d'}, '60m':{i:'60m', r:'1mo'} }[tf];
+  const bInt = { '5m':'5m', '15m':'15m', '60m':'1h' }[tf];
+  const sources = [
+    { label:'XAU/USD spot \u00b7 Yahoo',       get: () => fetchYahoo('XAUUSD=X', yCfg.i, yCfg.r) },
+    { label:'Gold futures GC=F \u00b7 Yahoo',  get: () => fetchYahoo('GC=F',     yCfg.i, yCfg.r) },
+    { label:'PAXG/USDT \u00b7 Binance',        get: () => fetchBinancePAXG(bInt) }
+  ];
+  const FRESH_SEC = 30 * 60;
+  let bestStale = null;
+  for (const src of sources){
+    const candles = await src.get();
+    if (!candles) continue;
+    const age = Date.now()/1000 - candles[candles.length-1].time;
+    if (age <= FRESH_SEC) return { candles, label: src.label, ageMin: Math.max(0, Math.round(age/60)), stale:false };
+    if (!bestStale || candles[candles.length-1].time > bestStale.candles[bestStale.candles.length-1].time)
+      bestStale = { candles, label: src.label };
   }
-  throw new Error('Semua sumber data candle gagal (Yahoo/proxy). Coba lagi sebentar lagi.');
+  if (bestStale){
+    const age = Date.now()/1000 - bestStale.candles[bestStale.candles.length-1].time;
+    return Object.assign(bestStale, { ageMin: Math.round(age/60), stale:true });
+  }
+  throw new Error('Semua sumber data candle gagal. Coba lagi sebentar lagi.');
 }
 
-// Deteksi S/R: fractal swing high/low lalu dikelompokkan; skor = berapa kali level diuji
 function findSR(candles, price){
   const k = 3, piv = [];
   for (let i = k; i < candles.length - k; i++){
@@ -1094,24 +1123,23 @@ function findSR(candles, price){
     if (hi) piv.push(candles[i].high);
     if (lo) piv.push(candles[i].low);
   }
-  const tol = price * 0.0012; // toleransi klaster ±0.12% (≈ $5 di harga 4100)
+  const tol = price * 0.0012;
   const clusters = [];
   piv.forEach(p => {
     const c = clusters.find(c => Math.abs(c.p - p) < tol);
     if (c){ c.n++; c.p = (c.p * (c.n - 1) + p) / c.n; } else clusters.push({ p, n: 1 });
   });
-  const strong = clusters.filter(c => c.n >= 2); // minimal diuji 2x baru dianggap level
+  const strong = clusters.filter(c => c.n >= 2);
   return {
     res: strong.filter(c => c.p > price).sort((a,b) => a.p - b.p).slice(0, 3),
     sup: strong.filter(c => c.p < price).sort((a,b) => b.p - a.p).slice(0, 3)
   };
 }
 
-// Pivot harian klasik dari H/L/C hari penuh sebelumnya
 function dailyPivot(candles){
   const byDay = {};
   candles.forEach(c => {
-    const d = new Date((c.time - 7*3600) * 1000).toISOString().slice(0,10);
+    const d = new Date(c.time * 1000).toISOString().slice(0,10);
     (byDay[d] ||= []).push(c);
   });
   const days = Object.keys(byDay).sort();
@@ -1126,60 +1154,65 @@ function dailyPivot(candles){
 
 function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
+function renderLW(){
+  if (!lwRaw) return;
+  const off = lwOffset;
+  const data = lwRaw.candles.map(c => ({ time: c.time + 7*3600, open: c.open + off, high: c.high + off, low: c.low + off, close: c.close + off }));
+  const price = data[data.length - 1].close;
+
+  $('lwWrap').classList.remove('hidden');
+  if (lwChart){ lwChart.remove(); lwChart = null; }
+  lwAnalysisLines = [];
+  const buy = cssVar('--buy'), sell = cssVar('--sell'), gold = cssVar('--gold'), muted = cssVar('--muted');
+
+  lwChart = LightweightCharts.createChart($('lwWrap'), {
+    autoSize: true,
+    layout: { background: { color: 'transparent' }, textColor: muted, fontFamily: 'IBM Plex Mono' },
+    grid: { vertLines: { color: 'rgba(140,125,95,.10)' }, horzLines: { color: 'rgba(140,125,95,.10)' } },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: cssVar('--line'), rightOffset: 4 },
+    rightPriceScale: { borderColor: cssVar('--line') }
+  });
+  lwSeries = lwChart.addCandlestickSeries({ upColor: buy, downColor: sell, wickUpColor: buy, wickDownColor: sell, borderVisible: false });
+  lwSeries.setData(data);
+  // fokus ke ~120 candle terakhir agar terasa seperti TradingView, bukan seluruh histori dimampatkan
+  lwChart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 120), to: data.length + 4 });
+
+  const addLine = (p, color, title, solid) => lwSeries.createPriceLine({
+    price: p, color, lineWidth: solid ? 2 : 1,
+    lineStyle: solid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true, title
+  });
+
+  const sr = findSR(data, price);
+  sr.res.forEach((c, i) => addLine(c.p, sell, 'R' + (i+1) + ' (' + c.n + 'x uji)', false));
+  sr.sup.forEach((c, i) => addLine(c.p, buy,  'S' + (i+1) + ' (' + c.n + 'x uji)', false));
+  const pv = dailyPivot(data);
+  if (pv){
+    addLine(pv.P, gold, 'Pivot', false);
+    addLine(pv.R1, gold, 'R1 pivot', false);
+    addLine(pv.S1, gold, 'S1 pivot', false);
+  }
+  drawAnalysisLevels();
+
+  if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
+
+  const lastWib = new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', hour:'2-digit', minute:'2-digit', hour12:false }).format(new Date(lwRaw.candles[lwRaw.candles.length-1].time * 1000));
+  let txt = '\u2713 ' + lwRaw.label + ' \u00b7 ' + lwTf + ' \u00b7 candle terakhir ' + lastWib + ' WIB (' + lwRaw.ageMin + ' mnt lalu) \u00b7 harga ' + price.toFixed(2);
+  txt += lwOffset !== 0 ? ' \u00b7 kalibrasi ' + (lwOffset > 0 ? '+' : '') + lwOffset.toFixed(2) + ' diterapkan' : ' \u00b7 belum dikalibrasi ke broker (klik \u21c4)';
+  if (lwRaw.stale) txt += ' \u00b7 \u26a0 data lama (pasar tutup / sumber tertinggal)';
+  $('lwStatus').textContent = txt;
+  document.querySelectorAll('.lw-tf').forEach(b => b.classList.toggle('btn-gold', b.dataset.tf === lwTf));
+}
+
 async function loadAnalysisChart(){
-  $('lwStatus').textContent = 'Memuat data candle…';
+  $('lwStatus').textContent = 'Memuat data candle\u2026';
   $('lwLoad').disabled = true;
   try {
     await ensureLW();
-    const { candles, sym } = await fetchCandles(lwTf);
-    const price = candles[candles.length - 1].close;
-
-    $('lwWrap').classList.remove('hidden');
-    if (lwChart){ lwChart.remove(); lwChart = null; }
-    lwAnalysisLines = [];
-    const buy = cssVar('--buy'), sell = cssVar('--sell'), gold = cssVar('--gold'), muted = cssVar('--muted');
-
-    lwChart = LightweightCharts.createChart($('lwWrap'), {
-      autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: muted, fontFamily: 'IBM Plex Mono' },
-      grid: { vertLines: { color: 'rgba(140,125,95,.10)' }, horzLines: { color: 'rgba(140,125,95,.10)' } },
-      timeScale: { timeVisible: true, secondsVisible: false, borderColor: cssVar('--line') },
-      rightPriceScale: { borderColor: cssVar('--line') }
-    });
-    lwSeries = lwChart.addCandlestickSeries({
-      upColor: buy, downColor: sell, wickUpColor: buy, wickDownColor: sell, borderVisible: false
-    });
-    lwSeries.setData(candles);
-    lwChart.timeScale().fitContent();
-
-    const addLine = (p, color, title, solid) => lwSeries.createPriceLine({
-      price: p, color, lineWidth: solid ? 2 : 1,
-      lineStyle: solid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: true, title
-    });
-
-    // S/R teknikal
-    const sr = findSR(candles, price);
-    sr.res.forEach((c, i) => addLine(c.p, sell, 'R' + (i+1) + ' (' + c.n + 'x uji)', false));
-    sr.sup.forEach((c, i) => addLine(c.p, buy,  'S' + (i+1) + ' (' + c.n + 'x uji)', false));
-    const pv = dailyPivot(candles);
-    if (pv){
-      addLine(pv.P, gold, 'Pivot', false);
-      addLine(pv.R1, gold, 'R1 pivot', false);
-      addLine(pv.S1, gold, 'S1 pivot', false);
-    }
-
-    // Level fundamental dari analisis terakhir
-    drawAnalysisLevels();
-
-    // bantu isi harga XAU jika kosong
-    if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
-
-    $('lwStatus').textContent = '✓ ' + candles.length + ' candle (' + sym + ', ' + lwTf + ') · harga terakhir ' + price.toFixed(2) +
-      ' · S/R dari swing yang diuji ≥2x · sumber Yahoo Finance (delay ±1–2 mnt)';
-    document.querySelectorAll('.lw-tf').forEach(b => b.classList.toggle('btn-gold', b.dataset.tf === lwTf));
+    lwRaw = await fetchCandles(lwTf);
+    renderLW();
   } catch(e){
-    $('lwStatus').textContent = '⚠ ' + e.message;
+    $('lwStatus').textContent = '\u26a0 ' + e.message;
   } finally {
     $('lwLoad').disabled = false;
   }
@@ -1201,6 +1234,13 @@ function drawAnalysisLevels(){
 
 $('lwLoad').onclick = loadAnalysisChart;
 document.querySelectorAll('.lw-tf').forEach(b => b.onclick = () => { lwTf = b.dataset.tf; loadAnalysisChart(); });
+$('lwCalib').onclick = () => {
+  if (!lwRaw){ alert('Muat chart dulu (klik \u25b6 Muat Chart).'); return; }
+  const broker = parseFloat(($('xauPrice').value || '').replace(',', '.'));
+  if (!broker || broker <= 0){ alert('Isi dulu kolom "Harga XAU saat ini" di panel Analisis Deviasi dengan harga dari broker/TradingView-mu, lalu klik \u21c4 Kalibrasi lagi.'); return; }
+  lwOffset = broker - lwRaw.candles[lwRaw.candles.length - 1].close;
+  renderLW();
+};
 
 /* ================= LAMPIRAN SCREENSHOT ================= */
 let pendingShot = null;

@@ -225,11 +225,12 @@ tailwind.config = {
         </div>
       </div>
       <p class="text-xs text-muted mb-2">
-        <span style="color:var(--sell)">━ ━ Resistance</span> · <span style="color:var(--buy)">━ ━ Support</span> (dideteksi otomatis dari swing high/low, angka di label = berapa kali diuji) ·
-        <span class="text-gold">━ ━ Pivot harian</span> · garis solid = Entry/TP/SL dari analisis terakhirmu.
+        Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing M5/M15 + swing H1 + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
+        Zona yang ditunjuk banyak metode = skor ★ tinggi = makin kuat. <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, garis solid = Entry/TP/SL analisismu.
       </p>
-      <div id="lwStatus" class="text-xs text-muted mb-2">Belum dimuat. Data harga dari Yahoo Finance (spot XAU/USD, cadangan futures GC=F) — bisa tertinggal 1–2 menit dari broker; garisnya untuk panduan, konfirmasi akhir tetap di MT4/MT5.</div>
+      <div id="lwStatus" class="text-xs text-muted mb-2">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi agar sejajar dengan harga broker-mu.</div>
       <div id="lwWrap" class="rounded-lg border border-line hidden" style="height:430px"></div>
+      <div id="lwZones" class="hidden mt-2 grid gap-1 text-xs font-mono"></div>
     </div>
 
     <!-- Hasil -->
@@ -1033,7 +1034,7 @@ $('tvToggle').onclick = () => {
 document.querySelectorAll('.tv-int').forEach(b => b.onclick = () => { tvInterval = b.dataset.int; loadTV(); });
 
 /* ================= CHART ANALISIS (S/R OTOMATIS) ================= */
-let lwChart = null, lwSeries = null, lwTf = '5m', lwAnalysisLines = [], lwRaw = null, lwOffset = 0;
+let lwChart = null, lwSeries = null, lwTf = '5m', lwAnalysisLines = [], lwRaw = null, lwRawH1 = null, lwOffset = 0;
 
 async function ensureLW(){
   if (window.LightweightCharts) return;
@@ -1152,6 +1153,88 @@ function dailyPivot(candles){
   return { P, R1: 2*P - L, S1: 2*P - H };
 }
 
+function clusterSwings(candles){
+  const k = 3, piv = [];
+  for (let i = k; i < candles.length - k; i++){
+    let hi = true, lo = true;
+    for (let j = 1; j <= k; j++){
+      if (candles[i].high < candles[i-j].high || candles[i].high < candles[i+j].high) hi = false;
+      if (candles[i].low  > candles[i-j].low  || candles[i].low  > candles[i+j].low ) lo = false;
+    }
+    if (hi) piv.push(candles[i].high);
+    if (lo) piv.push(candles[i].low);
+  }
+  const ref = candles[candles.length-1].close;
+  const tol = ref * 0.0012;
+  const clusters = [];
+  piv.forEach(p => {
+    const c = clusters.find(c => Math.abs(c.p - p) < tol);
+    if (c){ c.n++; c.p = (c.p * (c.n - 1) + p) / c.n; } else clusters.push({ p, n: 1 });
+  });
+  return clusters;
+}
+
+function prevDayHLC(candles){
+  const byDay = {};
+  candles.forEach(c => {
+    const d = new Date(c.time * 1000).toISOString().slice(0,10);
+    (byDay[d] ||= []).push(c);
+  });
+  const days = Object.keys(byDay).sort();
+  if (days.length < 2) return null;
+  const prev = byDay[days[days.length - 2]];
+  return {
+    H: Math.max(...prev.map(c => c.high)),
+    L: Math.min(...prev.map(c => c.low)),
+    C: prev[prev.length - 1].close
+  };
+}
+
+function asiaRange(candles){
+  // range sesi Asia hari terakhir: 06.00–13.59 WIB (waktu di data sudah digeser +7 jam → getUTCHours = jam WIB)
+  const lastDay = new Date(candles[candles.length-1].time * 1000).toISOString().slice(0,10);
+  const asia = candles.filter(c => {
+    const d = new Date(c.time * 1000);
+    return d.toISOString().slice(0,10) === lastDay && d.getUTCHours() >= 6 && d.getUTCHours() < 14;
+  });
+  if (asia.length < 5) return null;
+  return { H: Math.max(...asia.map(c => c.high)), L: Math.min(...asia.map(c => c.low)) };
+}
+
+function buildConfluence(data, price, h1data){
+  const cand = []; // kandidat level: {p, w(bobot), tag}
+  clusterSwings(data).forEach(c => { if (c.n >= 2) cand.push({ p: c.p, w: Math.min(c.n, 8), tag: 'swing ' + c.n + 'x' }); });
+  if (h1data) clusterSwings(h1data).forEach(c => { if (c.n >= 2) cand.push({ p: c.p, w: Math.min(c.n * 2, 10), tag: 'H1 ' + c.n + 'x' }); });
+
+  const pv = dailyPivot(data);
+  if (pv){ cand.push({ p: pv.P, w: 2, tag: 'pivot' }); cand.push({ p: pv.R1, w: 2, tag: 'R1 pivot' }); cand.push({ p: pv.S1, w: 2, tag: 'S1 pivot' }); }
+  const pd = prevDayHLC(data);
+  if (pd){ cand.push({ p: pd.H, w: 3, tag: 'PDH (high kemarin)' }); cand.push({ p: pd.L, w: 3, tag: 'PDL (low kemarin)' }); cand.push({ p: pd.C, w: 2, tag: 'close kemarin' }); }
+  const ar = asiaRange(data);
+  if (ar){ cand.push({ p: ar.H, w: 2, tag: 'Asia high' }); cand.push({ p: ar.L, w: 2, tag: 'Asia low' }); }
+
+  // angka bulat psikologis (kelipatan $50; kelipatan $100 lebih berat)
+  const lo = Math.min(...data.map(c => c.low)), hi = Math.max(...data.map(c => c.high));
+  for (let r = Math.ceil(lo / 50) * 50; r <= hi; r += 50){
+    cand.push({ p: r, w: r % 100 === 0 ? 3 : 2, tag: 'angka bulat ' + r });
+  }
+
+  // gabungkan kandidat berdekatan menjadi zona berskor
+  const tol = price * 0.0015;
+  const zones = [];
+  cand.forEach(x => {
+    const z = zones.find(z => Math.abs(z.p - x.p) < tol);
+    if (z){ z.p = (z.p * z.k + x.p * x.w) / (z.k + x.w); z.k += x.w; z.score += x.w; z.tags.push(x.tag); }
+    else zones.push({ p: x.p, k: x.w, score: x.w, tags: [x.tag] });
+  });
+  zones.forEach(z => { z.tags = [...new Set(z.tags)].slice(0, 3); });
+
+  const above = zones.filter(z => z.p > price).sort((a,b) => a.p - b.p);
+  const below = zones.filter(z => z.p < price).sort((a,b) => b.p - a.p);
+  const pick = arr => { let s = arr.filter(z => z.score >= 4).slice(0, 4); if (s.length < 3) s = arr.filter(z => z.score >= 2).slice(0, 4); return s; };
+  return { above: pick(above), below: pick(below) };
+}
+
 function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
 function renderLW(){
@@ -1182,16 +1265,33 @@ function renderLW(){
     lineStyle: solid ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
     axisLabelVisible: true, title
   });
+  const addLineW = (p, color, title, width) => lwSeries.createPriceLine({
+    price: p, color, lineWidth: width, lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true, title
+  });
 
-  const sr = findSR(data, price);
-  sr.res.forEach((c, i) => addLine(c.p, sell, 'R' + (i+1) + ' (' + c.n + 'x uji)', false));
-  sr.sup.forEach((c, i) => addLine(c.p, buy,  'S' + (i+1) + ' (' + c.n + 'x uji)', false));
-  const pv = dailyPivot(data);
-  if (pv){
-    addLine(pv.P, gold, 'Pivot', false);
-    addLine(pv.R1, gold, 'R1 pivot', false);
-    addLine(pv.S1, gold, 'S1 pivot', false);
-  }
+  const conf = buildConfluence(data, price, lwRawH1 ? lwRawH1.candles.map(c => ({ time: c.time + 7*3600, open: c.open + off, high: c.high + off, low: c.low + off, close: c.close + off })) : null);
+  conf.above.forEach((z, i) => addLineW(z.p, sell, 'R' + (i+1) + ' \u2605' + z.score, z.score >= 8 ? 2 : 1));
+  conf.below.forEach((z, i) => addLineW(z.p, buy,  'S' + (i+1) + ' \u2605' + z.score, z.score >= 8 ? 2 : 1));
+
+  // daftar zona + alasan
+  const zl = $('lwZones'); zl.innerHTML = ''; zl.classList.remove('hidden');
+  const zoneRow = (z, i, isRes) => {
+    const col = isRes ? sell : buy;
+    const dist = toPips(Math.abs(z.p - price));
+    const strength = z.score >= 10 ? 'SANGAT KUAT' : z.score >= 6 ? 'KUAT' : 'SEDANG';
+    return '<div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-line flex-wrap" style="background:var(--surface2)">' +
+      '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + col + '"></span>' +
+      '<span class="font-semibold" style="color:' + col + '">' + (isRes ? 'R' : 'S') + (i+1) + '</span>' +
+      '<span>' + z.p.toFixed(2) + '</span>' +
+      '<span class="text-muted">\u00b1' + dist + ' pips</span>' +
+      '<span class="text-gold">\u2605' + z.score + ' ' + strength + '</span>' +
+      '<span class="text-muted flex-1 text-right">' + z.tags.join(' + ') + '</span></div>';
+  };
+  [...conf.above].reverse().forEach((z, idx) => zl.innerHTML += zoneRow(z, conf.above.length - 1 - idx, true));
+  zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 harga ' + price.toFixed(2) + '</div>';
+  conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
+
   drawAnalysisLevels();
 
   if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
@@ -1210,6 +1310,10 @@ async function loadAnalysisChart(){
   try {
     await ensureLW();
     lwRaw = await fetchCandles(lwTf);
+    lwRawH1 = null;
+    if (lwTf !== '60m'){
+      try { lwRawH1 = await fetchCandles('60m'); } catch(e){ /* H1 opsional, lanjut tanpa */ }
+    }
     renderLW();
   } catch(e){
     $('lwStatus').textContent = '\u26a0 ' + e.message;

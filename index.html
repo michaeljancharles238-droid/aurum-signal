@@ -279,6 +279,36 @@ tailwind.config = {
       <button id="saveJournal" class="btn mt-4">✎ Simpan ke Jurnal</button>
     </div>
 
+    <!-- Kalkulator Lot Ideal -->
+    <div class="card p-4">
+      <h2 class="font-display text-lg font-semibold mb-1">Kalkulator Lot Ideal <span class="text-muted text-xs font-body">(manajemen risiko per trade)</span></h2>
+      <p class="text-xs text-muted mb-3">Lot menyesuaikan SL — bukan sebaliknya. Kolom SL terisi otomatis dari hasil analisis terakhirmu.</p>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div>
+          <label class="text-[11px] text-muted uppercase tracking-wider">Modal (USD)</label>
+          <input id="lotModal" inputmode="decimal" placeholder="cth: 1000">
+        </div>
+        <div>
+          <label class="text-[11px] text-muted uppercase tracking-wider">Risiko per trade</label>
+          <div class="flex gap-1 items-center">
+            <input id="lotRisk" inputmode="decimal" value="1" style="width:64px">
+            <span class="text-muted text-sm">%</span>
+            <button class="btn risk-chip" data-r="1" style="padding:6px 8px">1</button>
+            <button class="btn risk-chip" data-r="2" style="padding:6px 8px">2</button>
+          </div>
+        </div>
+        <div>
+          <label class="text-[11px] text-muted uppercase tracking-wider">SL (pips)</label>
+          <input id="lotSl" inputmode="decimal" placeholder="dari analisis">
+        </div>
+        <div class="flex flex-col justify-end">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Lot Ideal</div>
+          <div id="lotOut" class="font-mono text-2xl font-semibold text-gold">—</div>
+        </div>
+      </div>
+      <div id="lotDetail" class="text-xs p-2.5 rounded-lg border border-line leading-relaxed hidden" style="background:var(--surface2)"></div>
+    </div>
+
     <!-- Pemantauan Sesi Live -->
     <div id="sessionCard" class="card p-4 hidden">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
@@ -743,6 +773,7 @@ $('analyzeBtn').onclick = () => {
   lastAnalysis = { time: new Date().toISOString(), title, forecast: $('evForecast').value, actual: stat.manual ? devText : $('evActual').value, bias, strength, levels };
   renderChecklist(bias, levels);
   if (levels) startSession(levels.entry, bias); else $('sessionCard').classList.add('hidden');
+  if (levels){ $('lotSl').value = toPips(Math.abs(levels.entry - levels.sl)); updateLotCalc(); }
   drawAnalysisLevels(); // sinkronkan garis Entry/TP/SL ke Chart Analisis bila sedang terbuka
 };
 
@@ -1440,6 +1471,47 @@ $('calcPips').oninput = () => {
   updateProfit();
 };
 $('calcLot').oninput = updateProfit;
+
+/* ================= KALKULATOR LOT IDEAL ================= */
+$('lotModal').value = safeStore.get('aurum_modal') || '';
+$('lotRisk').value  = safeStore.get('aurum_risk')  || '1';
+
+function updateLotCalc(){
+  const modal = parseFloat(($('lotModal').value || '').replace(',', '.'));
+  const risk  = parseFloat(($('lotRisk').value  || '').replace(',', '.'));
+  const slPip = parseFloat(($('lotSl').value    || '').replace(',', '.'));
+  const out = $('lotOut'), det = $('lotDetail');
+
+  if (!modal || !risk || !slPip || modal <= 0 || risk <= 0 || slPip <= 0){
+    out.textContent = '—'; det.classList.add('hidden'); return;
+  }
+  safeStore.set('aurum_modal', $('lotModal').value);
+  safeStore.set('aurum_risk',  $('lotRisk').value);
+
+  const riskUsd = modal * risk / 100;
+  const rawLot = riskUsd / (slPip * 10); // 1.0 lot XAU = $10/pip → lot = risiko($) / (SL(pips) x $10/pip)
+  const lot = Math.floor(rawLot * 100) / 100; // bulatkan KE BAWAH ke step 0.01 (aman, tidak melebihi risiko)
+
+  if (lot >= 0.01){
+    const actualRisk = lot * slPip * 10; // USD
+    out.textContent = lot.toFixed(2);
+    out.style.color = 'var(--gold)';
+    det.innerHTML = 'Risiko aktual: <b>$' + actualRisk.toFixed(2) + '</b> (' + (actualRisk/modal*100).toFixed(2) + '% dari modal) · ' +
+      'nilai per pip di lot ini: <b>$' + (lot*10).toFixed(2) + '</b> · ' +
+      'jika SL kena, sisa modal ≈ $' + (modal - actualRisk).toFixed(2) + '.';
+    if (risk > 2) det.innerHTML += '<br><b style="color:var(--sell)">⚠ Risiko ' + risk + '% di atas standar umum 1–2% — pastikan ini keputusan sadar.</b>';
+  } else {
+    const minRisk = 0.01 * slPip * 10;
+    out.textContent = '0.01*';
+    out.style.color = 'var(--sell)';
+    det.innerHTML = '<b style="color:var(--sell)">⚠ Perhitungan menghasilkan ' + rawLot.toFixed(3) + ' lot — di bawah minimum broker (0.01).</b><br>' +
+      'Jika tetap pakai 0.01 lot dengan SL ' + slPip + ' pips, risiko efektif = <b>$' + minRisk.toFixed(2) + ' (' + (minRisk/modal*100).toFixed(2) + '%)</b> — di atas target ' + risk + '%-mu. ' +
+      'Pilihan: perkecil SL (entry lebih presisi), naikkan toleransi risiko secara sadar, atau lewati trade ini.';
+  }
+  det.classList.remove('hidden');
+}
+['lotModal','lotRisk','lotSl'].forEach(id => $(id).oninput = updateLotCalc);
+document.querySelectorAll('.risk-chip').forEach(b => b.onclick = () => { $('lotRisk').value = b.dataset.r; updateLotCalc(); });
 
 /* ================= EVENT BINDING ================= */
 $('fetchBtn').onclick = fetchCalendar;

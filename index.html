@@ -218,20 +218,15 @@ tailwind.config = {
         <h2 class="font-display text-lg font-semibold">Chart Analisis <span class="text-muted text-xs font-body">(3 timeframe sekaligus — S/R otomatis + level Entry/TP/SL)</span></h2>
         <div class="flex gap-2 items-center flex-wrap">
           <button id="lwLoad" class="btn btn-gold">▶ Muat 3 Chart</button>
-          <button id="smcToggle" class="btn btn-gold" title="Tampilkan/sembunyikan zona SMC (Order Block valid + FVG)">◼ SMC: ON</button>
           <button id="lwCalib" class="btn" title="Selaraskan ketiga chart dengan harga broker (isi kolom 'Harga XAU saat ini' dulu)">⇄ Kalibrasi Semua</button>
         </div>
       </div>
       <p class="text-xs text-muted mb-2">
         Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing timeframe aktif + swing H1 + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
-        Zona yang ditunjuk banyak metode = skor ★ tinggi = makin kuat. <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, garis solid = Entry/TP/SL analisismu.
+        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Hammer/Shooting Star/Doji), struktur SMC (BOS/CHoCH), dan Fair Value Gap — ★ berarti pola itu terbentuk tepat di zona S/R kuat (konfluensi ganda = probabilitas lebih valid).
+        <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, garis solid = Entry/TP/SL analisismu.
       </p>
-      <p class="text-xs text-muted mb-2">
-        Modul <b class="text-gold">SMC</b>: <b>OB</b> = Order Block yang lolos 2 syarat validitas (<span class="font-mono">✓sweep</span> wick liquidity + <span class="font-mono">✓gap</span> imbalance sesudahnya) ·
-        <b>FVG</b> = celah harga yang belum terisi. Keduanya <b>area reaksi potensial untuk timing entry</b> — bukan prediksi arah, dan wajib searah bias fundamental.
-        <span class="text-gold">FRESH</span> = belum pernah disentuh ulang (lebih diprioritaskan), <span class="text-muted">TESTED</span> = sudah pernah disentuh.
-      </p>
-      <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi Semua agar sejajar dengan harga broker-mu. ⚠ Catatan SMC: data gratis kadang punya candle bolong — FVG yang muncul dari candle hilang (bukan pergerakan asli) bisa palsu; selalu cek silang dengan chart broker.</div>
+      <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi Semua agar sejajar dengan harga broker-mu.</div>
 
       <div class="grid gap-4">
         <div id="lwPanel-5m" class="lw-panel">
@@ -241,7 +236,7 @@ tailwind.config = {
           </div>
           <div id="lwWrap-5m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-5m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
-          <div id="lwSmc-5m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwPatterns-5m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
 
         <div id="lwPanel-15m" class="lw-panel">
@@ -251,7 +246,7 @@ tailwind.config = {
           </div>
           <div id="lwWrap-15m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-15m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
-          <div id="lwSmc-15m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwPatterns-15m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
 
         <div id="lwPanel-60m" class="lw-panel">
@@ -261,7 +256,7 @@ tailwind.config = {
           </div>
           <div id="lwWrap-60m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-60m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
-          <div id="lwSmc-60m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwPatterns-60m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
       </div>
     </div>
@@ -802,7 +797,6 @@ $('analyzeBtn').onclick = () => {
     $('strategyNote').innerHTML =
       `<b class="text-gold">Catatan eksekusi:</b> Jangan entry pada detik pertama — spread melebar dan slippage tinggi saat rilis.
        Pola yang umum dipakai trader berita: tunggu <b>spike awal 1–3 menit</b>, lalu entry saat <b>retrace/retest</b> ke arah bias.
-       Prioritaskan retest yang jatuh di <b>zona SMC searah bias</b> (OB valid / FVG belum terisi — lihat Chart Analisis).
        TP1 (60% jarak) untuk amankan sebagian posisi, sisanya biarkan ke TP2. RR sekitar 1 : 2.
        Batalkan rencana jika harga sudah bergerak melebihi TP1 sebelum kamu masuk.`;
   } else {
@@ -913,8 +907,7 @@ const CHECK_ITEMS = (bias, levels) => [
   `Belum priced-in: 15–30 menit sebelum rilis harga TIDAK bergerak kuat searah ${bias}`,
   `Candle M1 pertama setelah rilis searah bias ${bias} (body dominan, bukan wick panjang menolak arah)`,
   'Spread sudah kembali normal (bukan detik-detik pertama rilis)',
-  'Sudah ada retrace/retest dari spike awal — bukan mengejar harga (chasing)',
-  `Retest jatuh di zona SMC searah ${bias} (OB valid ✓sweep+✓gap yang FRESH, atau FVG belum terisi) — lihat daftar Zona SMC di Chart Analisis`
+  'Sudah ada retrace/retest dari spike awal — bukan mengejar harga (chasing)'
 ];
 function renderChecklist(bias, levels){
   const box = $('chartChecklist');
@@ -1210,75 +1203,6 @@ function clusterSwings(candles){
   return clusters;
 }
 
-/* ================= MODUL SMC: FVG & ORDER BLOCK =================
-   Implementasi mengikuti aturan materi SMC yang dipelajari:
-   FVG  = celah 3-candle: high candle-1 < low candle-3 (bullish) atau
-          low candle-1 > high candle-3 (bearish). Ditandai "terisi" bila
-          harga sesudahnya menutup penuh celahnya.
-   OB   = candle terakhir berlawanan arah sebelum gerakan impulsif, VALID hanya jika:
-          1) SWEEP  : wick-nya menembus (take out) wick candle sebelumnya
-          2) GAP    : lahir FVG searah dalam <=3 candle sesudahnya (imbalance)
-   Status: FRESH = belum pernah disentuh ulang · TESTED = sudah pernah ·
-           broken/filled = tidak ditampilkan lagi (sudah gugur).
-   Catatan jujur: ini alat bantu TIMING entry di dalam bias yang sudah ada,
-   bukan prediksi arah — efektivitasnya harus dibuktikan lewat jurnalmu. */
-
-function detectFVG(candles){
-  const out = [];
-  for (let i = 2; i < candles.length; i++){
-    const a = candles[i-2], c = candles[i];
-    if (a.high < c.low)  out.push({ type:'bull', top:c.low,  bottom:a.high, i:i-1 }); // gap naik
-    if (a.low  > c.high) out.push({ type:'bear', top:a.low,  bottom:c.high, i:i-1 }); // gap turun
-  }
-  out.forEach(z => {
-    z.filled = false; z.touched = false;
-    for (let j = z.i + 2; j < candles.length; j++){
-      if (z.type === 'bull'){
-        if (candles[j].low <= z.top) z.touched = true;
-        if (candles[j].low <= z.bottom){ z.filled = true; break; } // celah tertutup penuh
-      } else {
-        if (candles[j].high >= z.bottom) z.touched = true;
-        if (candles[j].high >= z.top){ z.filled = true; break; }
-      }
-    }
-  });
-  return out;
-}
-
-function detectOB(candles, fvgs){
-  const out = [];
-  for (let i = 1; i < candles.length - 3; i++){
-    const c = candles[i];
-    const isBear = c.close < c.open, isBull = c.close > c.open;
-    if (isBear){
-      // kandidat OB bullish: candle merah yang wick bawahnya MENYAPU low candle sebelumnya
-      const sweep = c.low < candles[i-1].low;
-      const gapAfter = fvgs.some(z => z.type === 'bull' && z.i > i && z.i <= i + 3);
-      if (sweep && gapAfter)
-        out.push({ type:'bull', top:c.high, bottom:c.low, mid:(c.high + c.low)/2, i });
-    } else if (isBull){
-      // kandidat OB bearish: candle hijau yang wick atasnya MENYAPU high candle sebelumnya
-      const sweep = c.high > candles[i-1].high;
-      const gapAfter = fvgs.some(z => z.type === 'bear' && z.i > i && z.i <= i + 3);
-      if (sweep && gapAfter)
-        out.push({ type:'bear', top:c.high, bottom:c.low, mid:(c.high + c.low)/2, i });
-    }
-  }
-  out.forEach(z => {
-    z.tested = false; z.broken = false;
-    for (let j = z.i + 2; j < candles.length; j++){
-      if (z.type === 'bull'){
-        if (candles[j].low <= z.top) z.tested = true;
-        if (candles[j].close < z.bottom){ z.broken = true; break; } // close di bawah OB = gugur
-      } else {
-        if (candles[j].high >= z.bottom) z.tested = true;
-        if (candles[j].close > z.top){ z.broken = true; break; }
-      }
-    }
-  });
-  return out;
-}
-
 function dailyPivot(candles){
   const byDay = {};
   candles.forEach(c => {
@@ -1351,6 +1275,133 @@ function buildConfluence(data, price, h1data){
 
 function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
+/* ---- Pattern Recognition Engine: candlestick + struktur SMC (BOS/CHoCH) + FVG ---- */
+function detectCandlePatterns(data){
+  const out = [];
+  const n = data.length;
+  const start = Math.max(2, n - 40); // fokus ke sinyal yang masih relevan (aktual), bukan seluruh histori
+  for (let i = start; i < n; i++){
+    const c = data[i], p = data[i-1];
+    const body = Math.abs(c.close - c.open), range = (c.high - c.low) || 1e-9;
+    const upW = c.high - Math.max(c.open, c.close), loW = Math.min(c.open, c.close) - c.low;
+    const bullish = c.close > c.open, bearish = c.close < c.open;
+    const pBullish = p.close > p.open, pBearish = p.close < p.open;
+    const pBody = Math.abs(p.close - p.open);
+
+    if (bullish && pBearish && c.open <= p.close && c.close >= p.open && body > pBody)
+      out.push({ i, time:c.time, price:c.low, dir:'buy', type:'Bullish Engulfing', desc:'Body menelan candle turun sebelumnya \u2014 tekanan beli mendominasi' });
+    if (bearish && pBullish && c.open >= p.close && c.close <= p.open && body > pBody)
+      out.push({ i, time:c.time, price:c.high, dir:'sell', type:'Bearish Engulfing', desc:'Body menelan candle naik sebelumnya \u2014 tekanan jual mendominasi' });
+    if (loW >= body*2 && upW <= body*0.6 && body/range < 0.4)
+      out.push({ i, time:c.time, price:c.low, dir:'buy', type:'Hammer / Pin Bar Bawah', desc:'Penolakan tajam di bawah \u2014 buyer masuk kuat di level ini' });
+    if (upW >= body*2 && loW <= body*0.6 && body/range < 0.4)
+      out.push({ i, time:c.time, price:c.high, dir:'sell', type:'Shooting Star / Pin Bar Atas', desc:'Penolakan tajam di atas \u2014 seller masuk kuat di level ini' });
+    if (body/range < 0.08)
+      out.push({ i, time:c.time, price:c.close, dir:'neutral', type:'Doji', desc:'Keraguan pasar \u2014 potensi jeda atau pembalikan momentum' });
+  }
+  return out;
+}
+
+function findSwingSeq(data, k){
+  const sw = [];
+  for (let i = k; i < data.length - k; i++){
+    let hi = true, lo = true;
+    for (let j = 1; j <= k; j++){
+      if (data[i].high < data[i-j].high || data[i].high < data[i+j].high) hi = false;
+      if (data[i].low  > data[i-j].low  || data[i].low  > data[i+j].low ) lo = false;
+    }
+    if (hi) sw.push({ i, price:data[i].high, type:'H' });
+    if (lo) sw.push({ i, price:data[i].low,  type:'L' });
+  }
+  return sw.sort((a,b) => a.i - b.i);
+}
+
+function detectStructure(data){
+  const sw = findSwingSeq(data, 2);
+  const highs = sw.filter(s => s.type === 'H'), lows = sw.filter(s => s.type === 'L');
+  if (highs.length < 2 || lows.length < 2) return [];
+  const uptrend   = highs[highs.length-1].price > highs[highs.length-2].price && lows[lows.length-1].price > lows[lows.length-2].price;
+  const downtrend = highs[highs.length-1].price < highs[highs.length-2].price && lows[lows.length-1].price < lows[lows.length-2].price;
+  const refHigh = highs[highs.length-2], refLow = lows[lows.length-2];
+  const out = [], n = data.length;
+  for (let i = Math.max(1, n-6); i < n; i++){
+    if (refHigh && data[i].close > refHigh.price && data[i-1].close <= refHigh.price){
+      out.push({ i, time:data[i].time, price:refHigh.price, dir:'buy',
+        type: downtrend ? 'CHoCH Bullish' : 'BOS Bullish',
+        desc: downtrend ? 'Struktur turun pecah ke atas \u2014 potensi pembalikan arah' : 'Menembus swing high \u2014 melanjutkan tren naik' });
+    }
+    if (refLow && data[i].close < refLow.price && data[i-1].close >= refLow.price){
+      out.push({ i, time:data[i].time, price:refLow.price, dir:'sell',
+        type: uptrend ? 'CHoCH Bearish' : 'BOS Bearish',
+        desc: uptrend ? 'Struktur naik pecah ke bawah \u2014 potensi pembalikan arah' : 'Menembus swing low \u2014 melanjutkan tren turun' });
+    }
+  }
+  return out;
+}
+
+function detectFVG(data){
+  const out = [], n = data.length, start = Math.max(2, n - 40);
+  for (let i = start; i < n; i++){
+    const a = data[i-2], b = data[i];
+    if (a.high < b.low)
+      out.push({ i, time:data[i-1].time, price:(a.high+b.low)/2, dir:'buy',  type:'Fair Value Gap (Bullish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai support' });
+    if (a.low > b.high)
+      out.push({ i, time:data[i-1].time, price:(a.low+b.high)/2, dir:'sell', type:'Fair Value Gap (Bearish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai resistance' });
+  }
+  return out;
+}
+
+function detectPatterns(data, conf){
+  const price = data[data.length-1].close;
+  let all = [...detectCandlePatterns(data), ...detectStructure(data), ...detectFVG(data)];
+  all.sort((a,b) => b.i - a.i);
+  all = all.slice(0, 6); // hanya sinyal paling baru/relevan agar tidak membanjiri panel
+  const zones = [...conf.above, ...conf.below];
+  const tol = price * 0.0015;
+  all.forEach(p => {
+    const near = zones.find(z => Math.abs(z.p - p.price) < tol);
+    p.confluence = !!near;
+    p.confluenceLabel = near ? ((near.p > price ? 'R' : 'S') + ' \u2605' + near.score) : null;
+  });
+  return all;
+}
+
+function renderPatternMarkers(series, patterns, lastTime){
+  const seen = new Set();
+  const markers = patterns.filter(p => {
+    const key = p.time; if (seen.has(key)) return false; seen.add(key); return true;
+  }).map(p => ({
+    time: p.time,
+    position: p.dir === 'buy' ? 'belowBar' : p.dir === 'sell' ? 'aboveBar' : 'inBar',
+    color: p.dir === 'buy' ? cssVar('--buy') : p.dir === 'sell' ? cssVar('--sell') : cssVar('--gold'),
+    shape: p.dir === 'buy' ? 'arrowUp' : p.dir === 'sell' ? 'arrowDown' : 'circle',
+    text: p.confluence ? (p.type.split(' ')[0] + ' \u2605') : p.type.split(' ')[0]
+  })).sort((a,b) => a.time - b.time);
+  series.setMarkers(markers);
+}
+
+function renderPatternList(tf, patterns, lastTime){
+  const holder = $('lwPatterns-' + tf);
+  if (!patterns.length){ holder.classList.add('hidden'); return; }
+  holder.classList.remove('hidden');
+  holder.innerHTML = '';
+  patterns.forEach(p => {
+    const col = p.dir === 'buy' ? cssVar('--buy') : p.dir === 'sell' ? cssVar('--sell') : cssVar('--gold');
+    const agoMin = Math.max(0, Math.round((lastTime - p.time) / 60));
+    const ago = agoMin < 1 ? 'baru saja' : agoMin + ' mnt lalu';
+    holder.innerHTML += '<div class="flex items-start gap-1.5 px-2 py-1 rounded border border-line" style="background:var(--surface2)">' +
+      '<span class="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style="background:' + col + '"></span>' +
+      '<div class="flex-1 min-w-0">' +
+        '<div class="flex items-center gap-1.5 flex-wrap">' +
+          '<span class="font-semibold" style="color:' + col + '">' + p.type + '</span>' +
+          (p.confluence ? '<span class="text-gold text-[10px]">\u2605 konfluensi ' + p.confluenceLabel + '</span>' : '') +
+          '<span class="text-muted text-[10px]">\u00b7 ' + ago + '</span>' +
+        '</div>' +
+        '<div class="text-muted text-[10px] leading-snug">' + p.desc + '</div>' +
+      '</div></div>';
+  });
+}
+
 function renderPanel(tf){
   const raw = lwRawMap[tf];
   if (!raw) return;
@@ -1404,70 +1455,10 @@ function renderPanel(tf){
   zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
   conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
 
-  /* ---- Render zona SMC (OB valid + FVG belum terisi) ---- */
-  const smcBox = $('lwSmc-' + tf);
-  if (smcBox){
-    smcBox.innerHTML = '';
-    if (!smcEnabled){
-      smcBox.classList.add('hidden');
-    } else {
-      smcBox.classList.remove('hidden');
-      const gold = cssVar('--gold');
-      const fvgs = detectFVG(data);
-      const obs  = detectOB(data, fvgs);
-      const nearPct = 0.02; // hanya tampilkan zona dalam ±2% dari harga (fokus, tidak berantakan)
-      const near = p => Math.abs(p - price) / price <= nearPct;
-
-      // OB bullish di bawah harga & bearish di atas harga saja (yang relevan untuk entry berikutnya)
-      const obBull = obs.filter(z => z.type === 'bull' && !z.broken && z.top <  price && near(z.top)).slice(-2).reverse();
-      const obBear = obs.filter(z => z.type === 'bear' && !z.broken && z.bottom > price && near(z.bottom)).slice(-2).reverse();
-      const fvgBull = fvgs.filter(z => z.type === 'bull' && !z.filled && z.top <  price && near(z.top)).slice(-2).reverse();
-      const fvgBear = fvgs.filter(z => z.type === 'bear' && !z.filled && z.bottom > price && near(z.bottom)).slice(-2).reverse();
-
-      // Garis di chart: hanya zona TERDEKAT tiap jenis supaya chart tetap bersih
-      const dot = LightweightCharts.LineStyle.Dotted;
-      const mkSmcLine = (p, color, title, style) => series.createPriceLine({
-        price: p, color, lineWidth: 1, lineStyle: style ?? dot, axisLabelVisible: true, title
-      });
-      if (obBull[0]){ mkSmcLine(obBull[0].top, buy, 'OB\u25b2 entry'); mkSmcLine(obBull[0].mid, gold, 'OB\u25b2 50%'); }
-      if (obBear[0]){ mkSmcLine(obBear[0].bottom, sell, 'OB\u25bc entry'); mkSmcLine(obBear[0].mid, gold, 'OB\u25bc 50%'); }
-      if (fvgBull[0]) mkSmcLine((fvgBull[0].top + fvgBull[0].bottom)/2, buy, 'FVG\u25b2');
-      if (fvgBear[0]) mkSmcLine((fvgBear[0].top + fvgBear[0].bottom)/2, sell, 'FVG\u25bc');
-
-      const smcRow = (z, kind) => {
-        const isBull = z.type === 'bull';
-        const col = isBull ? buy : sell;
-        const arrow = isBull ? '\u25b2' : '\u25bc';
-        const distP = toPips(Math.abs((isBull ? z.top : z.bottom) - price));
-        const fresh = kind === 'OB' ? !z.tested : !z.touched;
-        const status = fresh
-          ? '<span class="text-gold font-semibold">FRESH</span>'
-          : '<span class="text-muted">TESTED</span>';
-        const extra = kind === 'OB'
-          ? ' \u00b7 <span class="text-muted">50%: ' + z.mid.toFixed(2) + '</span> \u00b7 <span style="color:' + col + '">\u2713sweep \u2713gap</span>'
-          : ' \u00b7 <span class="text-muted">belum terisi</span>';
-        return '<div class="flex items-center gap-1.5 px-2 py-1 rounded border flex-wrap" style="background:var(--surface2);border-color:' + col + '40">' +
-          '<span class="font-semibold" style="color:' + col + '">' + kind + arrow + '</span>' +
-          '<span>' + z.bottom.toFixed(2) + '\u2013' + z.top.toFixed(2) + '</span>' +
-          '<span class="text-muted">\u00b1' + distP + 'p</span>' +
-          status + '<span class="flex-1 text-right">' + extra + '</span></div>';
-      };
-
-      let html = '<div class="text-[10px] uppercase tracking-widest text-gold mt-1">Zona SMC \u2014 area timing entry (wajib searah bias)</div>';
-      const rows = [];
-      obBear.forEach(z => rows.push(smcRow(z, 'OB')));
-      fvgBear.forEach(z => rows.push(smcRow(z, 'FVG')));
-      obBull.forEach(z => rows.push(smcRow(z, 'OB')));
-      fvgBull.forEach(z => rows.push(smcRow(z, 'FVG')));
-      if (rows.length){
-        html += rows.join('');
-        html += '<div class="text-[10px] text-muted leading-relaxed mt-0.5">Entry model: <b>konservatif</b> = tunggu harga masuk zona lalu ada reaksi (candle penolakan) \u00b7 <b>agresif</b> = limit order di 50% OB. SL selalu di luar sisi seberang zona. Prioritaskan FRESH; zona TESTED lebih lemah.</div>';
-      } else {
-        html += '<div class="text-muted px-2 py-1">Tidak ada OB valid / FVG aktif dalam \u00b12% dari harga di timeframe ini \u2014 sesuai prinsip materi: no sweep, no entry. Tunggu setup berikutnya.</div>';
-      }
-      smcBox.innerHTML = html;
-    }
-  }
+  const patterns = detectPatterns(data, conf);
+  const lastTime = data[data.length-1].time;
+  renderPatternMarkers(series, patterns, lastTime);
+  renderPatternList(tf, patterns, lastTime);
 
   drawAnalysisLevelsFor(tf);
   if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
@@ -1490,7 +1481,7 @@ async function loadAllCharts(){
       catch(e){ $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + e.message; }
     }
     TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); });
-    $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu. Zona SMC ikut terhitung ulang setiap kalibrasi/muat ulang.';
+    $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
   } catch(e){
     $('lwStatusGlobal').textContent = '\u26a0 ' + e.message;
   } finally {
@@ -1516,22 +1507,6 @@ function drawAnalysisLevelsFor(tf){
 function drawAnalysisLevels(){ TF_LIST.forEach(drawAnalysisLevelsFor); }
 
 $('lwLoad').onclick = loadAllCharts;
-
-/* ---- Toggle modul SMC ---- */
-let smcEnabled = safeStore.get('aurum_smc');
-if (smcEnabled === null || smcEnabled === undefined) smcEnabled = true; // default ON
-function refreshSmcBtn(){
-  $('smcToggle').textContent = smcEnabled ? '\u25fc SMC: ON' : '\u25fb SMC: OFF';
-  $('smcToggle').classList.toggle('btn-gold', smcEnabled);
-}
-refreshSmcBtn();
-$('smcToggle').onclick = () => {
-  smcEnabled = !smcEnabled;
-  safeStore.set('aurum_smc', smcEnabled);
-  refreshSmcBtn();
-  TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); });
-};
-
 $('lwCalib').onclick = () => {
   const broker = parseFloat(($('xauPrice').value || '').replace(',', '.'));
   if (!broker || broker <= 0){ alert('Isi dulu kolom "Harga XAU saat ini" di panel Analisis Deviasi dengan harga dari broker/TradingView-mu, lalu klik \u21c4 Kalibrasi Semua lagi.'); return; }
@@ -1696,7 +1671,6 @@ $('themeBtn').onclick = () => {
   const next = el.dataset.theme === 'dark' ? 'light' : 'dark';
   el.dataset.theme = next; safeStore.set('aurum_theme', next);
   if (tvVisible) loadTV(); // sesuaikan tema chart
-  TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); }); // warna zona SMC ikut tema
 };
 const savedTheme = safeStore.get('aurum_theme');
 if (savedTheme) document.documentElement.dataset.theme = savedTheme;

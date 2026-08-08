@@ -226,6 +226,10 @@ tailwind.config = {
         <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Hammer/Shooting Star/Doji), struktur SMC (BOS/CHoCH), dan Fair Value Gap — ★ berarti pola itu terbentuk tepat di zona S/R kuat (konfluensi ganda = probabilitas lebih valid).
         <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, garis solid = Entry/TP/SL analisismu.
       </p>
+      <label class="flex items-center gap-2 text-xs text-muted cursor-pointer select-none mb-2">
+        <input type="checkbox" id="patternStrict" checked style="width:auto">
+        Hanya tampilkan pola candlestick/FVG yang berkonfluensi dengan S/R <span class="text-gold">(rekomendasi — mengurangi sinyal palsu)</span>
+      </label>
       <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi Semua agar sejajar dengan harga broker-mu.</div>
 
       <div class="grid gap-4">
@@ -1351,11 +1355,29 @@ function detectFVG(data){
   return out;
 }
 
-function detectPatterns(data, conf){
+function detectStarPatterns(data){
+  const out = [];
+  const n = data.length, start = Math.max(2, n - 40);
+  for (let i = start; i < n; i++){
+    const c1 = data[i-2], c2 = data[i-1], c3 = data[i];
+    const body1 = Math.abs(c1.close - c1.open), body2 = Math.abs(c2.close - c2.open), body3 = Math.abs(c3.close - c3.open);
+    const mid1 = (c1.open + c1.close) / 2;
+    if (body1 > 0 && c1.close < c1.open && body2 < body1*0.4 && c3.close > c3.open && body3 > body1*0.5 && c3.close > mid1)
+      out.push({ i, time:c3.time, price:c2.low, dir:'buy', type:'Morning Star', desc:'Reversal 3-candle \u2014 tekanan jual berhenti, buyer mengambil alih dengan kuat' });
+    if (body1 > 0 && c1.close > c1.open && body2 < body1*0.4 && c3.close < c3.open && body3 > body1*0.5 && c3.close < mid1)
+      out.push({ i, time:c3.time, price:c2.high, dir:'sell', type:'Evening Star', desc:'Reversal 3-candle \u2014 tekanan beli berhenti, seller mengambil alih dengan kuat' });
+  }
+  return out;
+}
+
+function detectPatterns(data, conf, strict){
   const price = data[data.length-1].close;
-  let all = [...detectCandlePatterns(data), ...detectStructure(data), ...detectFVG(data)];
-  all.sort((a,b) => b.i - a.i);
-  all = all.slice(0, 6); // hanya sinyal paling baru/relevan agar tidak membanjiri panel
+  const cand   = detectCandlePatterns(data).map(p => Object.assign(p, { cat:'candle' }));
+  const star   = detectStarPatterns(data).map(p => Object.assign(p, { cat:'candle' }));
+  const struct = detectStructure(data).map(p => Object.assign(p, { cat:'structure' }));
+  const fvg    = detectFVG(data).map(p => Object.assign(p, { cat:'fvg' }));
+  let all = [...cand, ...star, ...struct, ...fvg];
+
   const zones = [...conf.above, ...conf.below];
   const tol = price * 0.0015;
   all.forEach(p => {
@@ -1363,7 +1385,13 @@ function detectPatterns(data, conf){
     p.confluence = !!near;
     p.confluenceLabel = near ? ((near.p > price ? 'R' : 'S') + ' \u2605' + near.score) : null;
   });
-  return all;
+
+  // mode ketat: sinyal struktur (BOS/CHoCH) selalu tampil karena sudah bermakna dengan sendirinya;
+  // pola candlestick/FVG hanya tampil jika berkonfluensi dengan zona S/R \u2014 mengurangi sinyal palsu
+  if (strict) all = all.filter(p => p.cat === 'structure' || p.confluence);
+
+  all.sort((a,b) => b.i - a.i);
+  return all.slice(0, 6);
 }
 
 function renderPatternMarkers(series, patterns, lastTime){
@@ -1455,7 +1483,7 @@ function renderPanel(tf){
   zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
   conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
 
-  const patterns = detectPatterns(data, conf);
+  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true);
   const lastTime = data[data.length-1].time;
   renderPatternMarkers(series, patterns, lastTime);
   renderPatternList(tf, patterns, lastTime);
@@ -1507,6 +1535,7 @@ function drawAnalysisLevelsFor(tf){
 function drawAnalysisLevels(){ TF_LIST.forEach(drawAnalysisLevelsFor); }
 
 $('lwLoad').onclick = loadAllCharts;
+$('patternStrict').onchange = () => { TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); }); };
 $('lwCalib').onclick = () => {
   const broker = parseFloat(($('xauPrice').value || '').replace(',', '.'));
   if (!broker || broker <= 0){ alert('Isi dulu kolom "Harga XAU saat ini" di panel Analisis Deviasi dengan harga dari broker/TradingView-mu, lalu klik \u21c4 Kalibrasi Semua lagi.'); return; }

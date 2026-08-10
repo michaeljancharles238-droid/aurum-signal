@@ -223,8 +223,9 @@ tailwind.config = {
       </div>
       <p class="text-xs text-muted mb-2">
         Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing timeframe aktif + swing H1 + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
-        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Hammer/Shooting Star/Doji), struktur SMC (BOS/CHoCH), dan Fair Value Gap — ★ berarti pola itu terbentuk tepat di zona S/R kuat (konfluensi ganda = probabilitas lebih valid).
-        <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, garis solid = Entry/TP/SL analisismu.
+        Digabung dalam satu daftar bersama <b class="text-gold">Order Block</b> (entry = sisi dangkal, 50% = ekuilibrium/CE) dan <b class="text-gold">Fair Value Gap</b>, sesuai posisi harga masing-masing.
+        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji) dan struktur SMC (BOS/CHoCH) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas.
+        <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, <span class="text-gold">emas = Order Block</span>, garis solid = Entry/TP/SL analisismu.
       </p>
       <label class="flex items-center gap-2 text-xs text-muted cursor-pointer select-none mb-2">
         <input type="checkbox" id="patternStrict" checked style="width:auto">
@@ -1355,6 +1356,33 @@ function detectFVG(data){
   return out;
 }
 
+// Order Block ala ICT: candle terakhir berlawanan warna sebelum breakout struktur (BOS/CHoCH) impulsif.
+// entryPrice = sisi dangkal blok (pertama disentuh saat harga retrace), fiftyPrice = titik ekuilibrium/CE (lebih dalam, lebih konservatif).
+function detectOrderBlocks(data){
+  const structSignals = detectStructure(data);
+  const out = [], seen = new Set();
+  structSignals.forEach(s => {
+    let j = s.i - 1, found = -1;
+    while (j > 0 && s.i - j <= 8){
+      const c = data[j];
+      const isDown = c.close < c.open, isUp = c.close > c.open;
+      if (s.dir === 'buy' && isDown){ found = j; break; }
+      if (s.dir === 'sell' && isUp){ found = j; break; }
+      j--;
+    }
+    if (found < 0) return;
+    const key = found + '_' + s.dir;
+    if (seen.has(key)) return; seen.add(key);
+    const ob = data[found];
+    const obHigh = ob.high, obLow = ob.low, fifty = (obHigh + obLow) / 2;
+    if (s.dir === 'buy')
+      out.push({ i:found, time:ob.time, entryPrice:obHigh, fiftyPrice:fifty, dir:'buy' });
+    else
+      out.push({ i:found, time:ob.time, entryPrice:obLow, fiftyPrice:fifty, dir:'sell' });
+  });
+  return out;
+}
+
 function detectStarPatterns(data){
   const out = [];
   const n = data.length, start = Math.max(2, n - 40);
@@ -1370,7 +1398,7 @@ function detectStarPatterns(data){
   return out;
 }
 
-function detectPatterns(data, conf, strict){
+function detectPatterns(data, conf, strict, obList){
   const price = data[data.length-1].close;
   const cand   = detectCandlePatterns(data).map(p => Object.assign(p, { cat:'candle' }));
   const star   = detectStarPatterns(data).map(p => Object.assign(p, { cat:'candle' }));
@@ -1378,16 +1406,21 @@ function detectPatterns(data, conf, strict){
   const fvg    = detectFVG(data).map(p => Object.assign(p, { cat:'fvg' }));
   let all = [...cand, ...star, ...struct, ...fvg];
 
-  const zones = [...conf.above, ...conf.below];
+  const obZones = (obList || []).flatMap(ob => [
+    { p: ob.entryPrice, score: 5, kind:'OB' }, { p: ob.fiftyPrice, score: 6, kind:'OB' }
+  ]);
+  const rZones = conf.above.map(z => Object.assign({}, z, { kind:'R' }));
+  const sZones = conf.below.map(z => Object.assign({}, z, { kind:'S' }));
+  const zones = [...rZones, ...sZones, ...obZones];
   const tol = price * 0.0015;
   all.forEach(p => {
     const near = zones.find(z => Math.abs(z.p - p.price) < tol);
     p.confluence = !!near;
-    p.confluenceLabel = near ? ((near.p > price ? 'R' : 'S') + ' \u2605' + near.score) : null;
+    p.confluenceLabel = near ? (near.kind + ' \u2605' + near.score) : null;
   });
 
   // mode ketat: sinyal struktur (BOS/CHoCH) selalu tampil karena sudah bermakna dengan sendirinya;
-  // pola candlestick/FVG hanya tampil jika berkonfluensi dengan zona S/R \u2014 mengurangi sinyal palsu
+  // pola candlestick/FVG hanya tampil jika berkonfluensi dengan zona S/R/OB \u2014 mengurangi sinyal palsu
   if (strict) all = all.filter(p => p.cat === 'structure' || p.confluence);
 
   all.sort((a,b) => b.i - a.i);
@@ -1462,28 +1495,46 @@ function renderPanel(tf){
   // H1 selalu dipakai sebagai pembobot sekunder untuk M5/M15; untuk panel H1 itu sendiri, primer
   const h1raw = lwRawMap['60m'];
   const h1data = (tf !== '60m' && h1raw) ? h1raw.candles.map(c => ({ time: c.time + 7*3600, open: c.open + lwOffsetMap['60m'], high: c.high + lwOffsetMap['60m'], low: c.low + lwOffsetMap['60m'], close: c.close + lwOffsetMap['60m'] })) : null;
+  const gold = cssVar('--gold');
   const conf = buildConfluence(data, price, h1data);
   conf.above.forEach((z, i) => addLineW(z.p, sell, 'R' + (i+1) + ' \u2605' + z.score, z.score >= 8 ? 2 : 1));
   conf.below.forEach((z, i) => addLineW(z.p, buy,  'S' + (i+1) + ' \u2605' + z.score, z.score >= 8 ? 2 : 1));
 
-  const zl = $('lwZones-' + tf); zl.innerHTML = ''; zl.classList.remove('hidden');
-  const zoneRow = (z, i, isRes) => {
-    const col = isRes ? sell : buy;
-    const dist = toPips(Math.abs(z.p - price));
-    const strength = z.score >= 10 ? 'SANGAT KUAT' : z.score >= 6 ? 'KUAT' : 'SEDANG';
-    return '<div class="flex items-center gap-1.5 px-2 py-1 rounded border border-line flex-wrap" style="background:var(--surface2)">' +
-      '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + col + '"></span>' +
-      '<span class="font-semibold" style="color:' + col + '">' + (isRes ? 'R' : 'S') + (i+1) + '</span>' +
-      '<span>' + z.p.toFixed(2) + '</span>' +
-      '<span class="text-muted">\u00b1' + dist + 'p</span>' +
-      '<span class="text-gold">\u2605' + z.score + ' ' + strength + '</span>' +
-      '<span class="text-muted flex-1 text-right truncate">' + z.tags.join('+') + '</span></div>';
-  };
-  [...conf.above].reverse().forEach((z, idx) => zl.innerHTML += zoneRow(z, conf.above.length - 1 - idx, true));
-  zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
-  conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
+  const obList = detectOrderBlocks(data);
+  obList.forEach(ob => {
+    const arrow = ob.dir === 'buy' ? '\u25b2' : '\u25bc';
+    addLineW(ob.entryPrice, gold, 'OB' + arrow + ' entry', 1);
+    addLineW(ob.fiftyPrice, gold, 'OB' + arrow + ' 50%', 1);
+  });
+  const fvgList = detectFVG(data);
+  fvgList.forEach(f => addLineW(f.price, f.dir === 'buy' ? buy : sell, f.dir === 'buy' ? 'FVG\u25b2' : 'FVG\u25bc', 1));
 
-  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true);
+  // Daftar sinyal terpadu: R/S + Order Block + FVG digabung satu list, diurutkan berdasarkan harga
+  const rows = [];
+  conf.above.forEach((z, i) => rows.push({ p:z.p, label:'R' + (i+1) + ' \u2605' + z.score, color:sell, sub:z.tags.join('+') }));
+  conf.below.forEach((z, i) => rows.push({ p:z.p, label:'S' + (i+1) + ' \u2605' + z.score, color:buy,  sub:z.tags.join('+') }));
+  obList.forEach(ob => {
+    const arrow = ob.dir === 'buy' ? '\u25b2' : '\u25bc';
+    rows.push({ p:ob.entryPrice, label:'OB' + arrow + ' entry', color:gold, sub:'Order Block \u2014 sisi dangkal (first touch)' });
+    rows.push({ p:ob.fiftyPrice, label:'OB' + arrow + ' 50%',   color:gold, sub:'Order Block \u2014 ekuilibrium/CE (lebih konservatif)' });
+  });
+  fvgList.forEach(f => rows.push({ p:f.price, label: f.dir === 'buy' ? 'FVG\u25b2' : 'FVG\u25bc', color: f.dir === 'buy' ? buy : sell, sub:'Fair Value Gap' }));
+  rows.sort((a,b) => b.p - a.p);
+
+  const zl = $('lwZones-' + tf); zl.innerHTML = ''; zl.classList.remove('hidden');
+  let priceInserted = false;
+  rows.forEach(r => {
+    if (!priceInserted && r.p < price){ zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>'; priceInserted = true; }
+    const dist = toPips(Math.abs(r.p - price));
+    zl.innerHTML += '<div class="flex items-center gap-1.5 px-2 py-1 rounded flex-wrap" style="background:' + r.color + ';color:#14100C">' +
+      '<span class="font-semibold">' + r.label + '</span>' +
+      '<span>' + r.p.toFixed(2) + '</span>' +
+      '<span class="opacity-70">\u00b1' + dist + 'p</span>' +
+      '<span class="flex-1 text-right text-[10px] opacity-70 truncate">' + r.sub + '</span></div>';
+  });
+  if (!priceInserted) zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
+
+  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true, obList);
   const lastTime = data[data.length-1].time;
   renderPatternMarkers(series, patterns, lastTime);
   renderPatternList(tf, patterns, lastTime);

@@ -233,6 +233,11 @@ tailwind.config = {
       </label>
       <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi Semua agar sejajar dengan harga broker-mu.</div>
 
+      <div class="mb-3 p-3 rounded-lg border border-line" style="background:var(--surface2)">
+        <div class="text-xs font-semibold uppercase tracking-widest text-gold mb-1">Zona SMC — Area Timing Entry (wajib searah bias)</div>
+        <div id="smcBiasNote" class="text-[11px] text-muted">Belum ada bias aktif — semua zona ditampilkan setara.</div>
+      </div>
+
       <div class="grid gap-4">
         <div id="lwPanel-5m" class="lw-panel">
           <div class="flex items-center justify-between gap-2 mb-1">
@@ -241,6 +246,7 @@ tailwind.config = {
           </div>
           <div id="lwWrap-5m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-5m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-5m" class="hidden mt-1.5 grid gap-1.5"></div>
           <div id="lwPatterns-5m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
 
@@ -251,6 +257,7 @@ tailwind.config = {
           </div>
           <div id="lwWrap-15m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-15m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-15m" class="hidden mt-1.5 grid gap-1.5"></div>
           <div id="lwPatterns-15m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
 
@@ -261,8 +268,14 @@ tailwind.config = {
           </div>
           <div id="lwWrap-60m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-60m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-60m" class="hidden mt-1.5 grid gap-1.5"></div>
           <div id="lwPatterns-60m" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
+      </div>
+
+      <div class="text-[11px] text-muted mt-3 leading-relaxed">
+        Entry model: <b class="text-gold">konservatif</b> = tunggu harga masuk zona lalu ada reaksi (candle penolakan) · <b class="text-gold">agresif</b> = limit order di 50% OB.
+        SL selalu di luar sisi seberang zona. Prioritaskan <span class="text-gold">FRESH</span>; zona <span class="text-muted">TESTED</span> lebih lemah.
       </div>
     </div>
 
@@ -815,6 +828,7 @@ $('analyzeBtn').onclick = () => {
   if (levels) startSession(levels.entry, bias); else $('sessionCard').classList.add('hidden');
   if (levels){ $('lotSl').value = toPips(Math.abs(levels.entry - levels.sl)); updateLotCalc(); }
   drawAnalysisLevels(); // sinkronkan garis Entry/TP/SL ke Chart Analisis bila sedang terbuka
+  if (typeof updateSmcBiasNote === 'function') updateSmcBiasNote();
 };
 
 /* ================= PEMANTAUAN SESI LIVE ================= */
@@ -1344,14 +1358,52 @@ function detectStructure(data){
   return out;
 }
 
+// Zona dianggap TESTED kalau ada candle setelah pembentukannya yang range-nya tumpang tindih dengan zona (harga sudah kembali menyentuhnya)
+function isZoneTested(data, originIdx, top, bottom){
+  for (let k = originIdx + 1; k < data.length; k++){
+    if (data[k].high >= bottom && data[k].low <= top) return true;
+  }
+  return false;
+}
+
+// Sweep: candle origin OB membuat ekstrem baru (high/low) melewati 10 candle sebelumnya \u2014 tanda liquidity grab sebelum reversal
+function hasSweepBefore(data, idx, lookback){
+  const c = data[idx];
+  let sweptLow = true, sweptHigh = true;
+  for (let j = Math.max(0, idx - lookback); j < idx; j++){
+    if (data[j].low <= c.low) sweptLow = false;
+    if (data[j].high >= c.high) sweptHigh = false;
+  }
+  return sweptLow || sweptHigh;
+}
+
+// Gap: apakah FVG searah terbentuk dalam 1-3 candle setelah OB \u2014 mengkonfirmasi keberangkatan harga benar-benar impulsif
+function hasGapAfter(data, originIdx, dir){
+  for (let i = originIdx + 1; i < Math.min(data.length, originIdx + 4); i++){
+    if (i < 2) continue;
+    const a = data[i-2], b = data[i];
+    if (dir === 'buy' && a.high < b.low) return true;
+    if (dir === 'sell' && a.low > b.high) return true;
+  }
+  return false;
+}
+
 function detectFVG(data){
   const out = [], n = data.length, start = Math.max(2, n - 40);
   for (let i = start; i < n; i++){
     const a = data[i-2], b = data[i];
-    if (a.high < b.low)
-      out.push({ i, time:data[i-1].time, price:(a.high+b.low)/2, dir:'buy',  type:'Fair Value Gap (Bullish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai support' });
-    if (a.low > b.high)
-      out.push({ i, time:data[i-1].time, price:(a.low+b.high)/2, dir:'sell', type:'Fair Value Gap (Bearish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai resistance' });
+    if (a.high < b.low){
+      const top = b.low, bottom = a.high;
+      out.push({ i, time:data[i-1].time, top, bottom, price:(top+bottom)/2, dir:'buy',
+        tested: isZoneTested(data, i, top, bottom),
+        type:'Fair Value Gap (Bullish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai support' });
+    }
+    if (a.low > b.high){
+      const top = a.low, bottom = b.high;
+      out.push({ i, time:data[i-1].time, top, bottom, price:(top+bottom)/2, dir:'sell',
+        tested: isZoneTested(data, i, top, bottom),
+        type:'Fair Value Gap (Bearish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai resistance' });
+    }
   }
   return out;
 }
@@ -1374,11 +1426,15 @@ function detectOrderBlocks(data){
     const key = found + '_' + s.dir;
     if (seen.has(key)) return; seen.add(key);
     const ob = data[found];
-    const obHigh = ob.high, obLow = ob.low, fifty = (obHigh + obLow) / 2;
-    if (s.dir === 'buy')
-      out.push({ i:found, time:ob.time, entryPrice:obHigh, fiftyPrice:fifty, dir:'buy' });
-    else
-      out.push({ i:found, time:ob.time, entryPrice:obLow, fiftyPrice:fifty, dir:'sell' });
+    const top = ob.high, bottom = ob.low, fifty = (top + bottom) / 2;
+    out.push({
+      i:found, time:ob.time, top, bottom, fifty, dir:s.dir,
+      entryPrice: s.dir === 'buy' ? top : bottom,
+      fiftyPrice: fifty,
+      tested: isZoneTested(data, found, top, bottom),
+      sweep: hasSweepBefore(data, found, 10),
+      gap: hasGapAfter(data, found, s.dir)
+    });
   });
   return out;
 }
@@ -1463,6 +1519,55 @@ function renderPatternList(tf, patterns, lastTime){
   });
 }
 
+function buildSmcZones(obList, fvgList, price){
+  const distPips = z => toPips(Math.min(Math.abs(price - z.top), Math.abs(price - z.bottom)));
+  const bearOB  = obList.filter(o => o.dir === 'sell').map(z => Object.assign({}, z, { kind:'OB' }));
+  const bullOB  = obList.filter(o => o.dir === 'buy').map(z => Object.assign({}, z, { kind:'OB' }));
+  const bearFVG = fvgList.filter(f => f.dir === 'sell').map(z => Object.assign({}, z, { kind:'FVG' }));
+  const bullFVG = fvgList.filter(f => f.dir === 'buy').map(z => Object.assign({}, z, { kind:'FVG' }));
+  const byDist = (a,b) => distPips(a) - distPips(b);
+  bearOB.sort(byDist); bullOB.sort(byDist); bearFVG.sort(byDist); bullFVG.sort(byDist);
+  return { bear: [...bearOB, ...bearFVG], bull: [...bullOB, ...bullFVG] };
+}
+
+function renderSmcZones(tf, zones, price, bias){
+  const holder = $('lwSmc-' + tf);
+  const rowHtml = (z, dirColor) => {
+    const distp = toPips(Math.min(Math.abs(price - z.top), Math.abs(price - z.bottom)));
+    const arrow = z.dir === 'sell' ? '\u25bc' : '\u25b2';
+    const dimAgainstBias = bias && ((bias === 'BUY' && z.dir === 'sell') || (bias === 'SELL' && z.dir === 'buy'));
+    const freshBadge = z.tested ? '<span class="text-muted">TESTED</span>' : '<span class="text-gold font-semibold">FRESH</span>';
+    let right;
+    if (z.kind === 'OB'){
+      right = '<div class="text-[10px] text-right leading-snug shrink-0">\u00b7 50%: <span class="text-gold">' + z.fifty.toFixed(2) + '</span><br>' +
+        '\u00b7 ' + (z.sweep ? '<span style="color:' + dirColor + '">\u2713sweep</span>' : '<span class="text-muted">\u2717sweep</span>') + ' ' +
+        (z.gap ? '<span style="color:' + dirColor + '">\u2713gap</span>' : '<span class="text-muted">\u2717gap</span>') + '</div>';
+    } else {
+      right = '<div class="text-[10px] text-muted text-right shrink-0">\u00b7 ' + (z.tested ? 'sudah tersentuh' : 'belum terisi') + '</div>';
+    }
+    return '<div class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border flex-wrap" style="border-color:' + dirColor + ';background:var(--surface2);opacity:' + (dimAgainstBias ? '.55' : '1') + '">' +
+      '<div class="text-xs">' +
+        '<span class="font-semibold" style="color:' + dirColor + '">' + z.kind + arrow + '</span> ' +
+        '<span class="font-mono">' + z.bottom.toFixed(2) + '\u2013' + z.top.toFixed(2) + '</span> ' +
+        '<span class="text-muted">\u00b1' + distp + 'p</span> ' + freshBadge +
+      '</div>' + right + '</div>';
+  };
+  const sell = cssVar('--sell'), buy = cssVar('--buy');
+  let html = zones.bear.map(z => rowHtml(z, sell)).join('') + zones.bull.map(z => rowHtml(z, buy)).join('');
+  if (!html){ holder.classList.add('hidden'); return; }
+  holder.innerHTML = html;
+  holder.classList.remove('hidden');
+}
+
+function updateSmcBiasNote(){
+  const el = $('smcBiasNote'); if (!el) return;
+  if (lastAnalysis && lastAnalysis.bias && lastAnalysis.bias !== 'NETRAL'){
+    const arrow = lastAnalysis.bias === 'BUY' ? '\u25b2 (hijau)' : '\u25bc (merah)';
+    el.textContent = 'Bias saat ini: ' + lastAnalysis.bias + ' \u2014 prioritaskan zona ' + arrow + ' untuk timing entry; zona berlawanan diredupkan, hanya referensi struktur.';
+  } else {
+    el.textContent = 'Belum ada bias aktif (jalankan Analisis Sekarang) \u2014 semua zona ditampilkan setara.';
+  }
+}
 function renderPanel(tf){
   const raw = lwRawMap[tf];
   if (!raw) return;
@@ -1509,30 +1614,28 @@ function renderPanel(tf){
   const fvgList = detectFVG(data);
   fvgList.forEach(f => addLineW(f.price, f.dir === 'buy' ? buy : sell, f.dir === 'buy' ? 'FVG\u25b2' : 'FVG\u25bc', 1));
 
-  // Daftar sinyal terpadu: R/S + Order Block + FVG digabung satu list, diurutkan berdasarkan harga
-  const rows = [];
-  conf.above.forEach((z, i) => rows.push({ p:z.p, label:'R' + (i+1) + ' \u2605' + z.score, color:sell, sub:z.tags.join('+') }));
-  conf.below.forEach((z, i) => rows.push({ p:z.p, label:'S' + (i+1) + ' \u2605' + z.score, color:buy,  sub:z.tags.join('+') }));
-  obList.forEach(ob => {
-    const arrow = ob.dir === 'buy' ? '\u25b2' : '\u25bc';
-    rows.push({ p:ob.entryPrice, label:'OB' + arrow + ' entry', color:gold, sub:'Order Block \u2014 sisi dangkal (first touch)' });
-    rows.push({ p:ob.fiftyPrice, label:'OB' + arrow + ' 50%',   color:gold, sub:'Order Block \u2014 ekuilibrium/CE (lebih konservatif)' });
-  });
-  fvgList.forEach(f => rows.push({ p:f.price, label: f.dir === 'buy' ? 'FVG\u25b2' : 'FVG\u25bc', color: f.dir === 'buy' ? buy : sell, sub:'Fair Value Gap' }));
-  rows.sort((a,b) => b.p - a.p);
-
+  // Daftar R/S (Confluence Engine) \u2014 ringkas, terpisah dari Zona SMC
   const zl = $('lwZones-' + tf); zl.innerHTML = ''; zl.classList.remove('hidden');
-  let priceInserted = false;
-  rows.forEach(r => {
-    if (!priceInserted && r.p < price){ zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>'; priceInserted = true; }
-    const dist = toPips(Math.abs(r.p - price));
-    zl.innerHTML += '<div class="flex items-center gap-1.5 px-2 py-1 rounded flex-wrap" style="background:' + r.color + ';color:#14100C">' +
-      '<span class="font-semibold">' + r.label + '</span>' +
-      '<span>' + r.p.toFixed(2) + '</span>' +
-      '<span class="opacity-70">\u00b1' + dist + 'p</span>' +
-      '<span class="flex-1 text-right text-[10px] opacity-70 truncate">' + r.sub + '</span></div>';
-  });
-  if (!priceInserted) zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
+  const zoneRow = (z, i, isRes) => {
+    const col = isRes ? sell : buy;
+    const dist = toPips(Math.abs(z.p - price));
+    const strength = z.score >= 10 ? 'SANGAT KUAT' : z.score >= 6 ? 'KUAT' : 'SEDANG';
+    return '<div class="flex items-center gap-1.5 px-2 py-1 rounded border border-line flex-wrap" style="background:var(--surface2)">' +
+      '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + col + '"></span>' +
+      '<span class="font-semibold" style="color:' + col + '">' + (isRes ? 'R' : 'S') + (i+1) + '</span>' +
+      '<span>' + z.p.toFixed(2) + '</span>' +
+      '<span class="text-muted">\u00b1' + dist + 'p</span>' +
+      '<span class="text-gold">\u2605' + z.score + ' ' + strength + '</span>' +
+      '<span class="text-muted flex-1 text-right truncate">' + z.tags.join('+') + '</span></div>';
+  };
+  [...conf.above].reverse().forEach((z, idx) => zl.innerHTML += zoneRow(z, conf.above.length - 1 - idx, true));
+  zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
+  conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
+
+  // Zona SMC \u2014 Order Block + FVG dalam bentuk rentang, status FRESH/TESTED, validasi sweep/gap
+  const smc = buildSmcZones(obList, fvgList, price);
+  renderSmcZones(tf, smc, price, lastAnalysis ? lastAnalysis.bias : null);
+  updateSmcBiasNote();
 
   const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true, obList);
   const lastTime = data[data.length-1].time;

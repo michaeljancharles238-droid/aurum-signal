@@ -1144,31 +1144,36 @@ async function ensureLW(){
   throw new Error('Gagal memuat library chart dari semua CDN \u2014 cek koneksi/adblocker.');
 }
 
+function fetchWithTimeout(url, ms){
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { cache:'no-store', signal: ctrl.signal }).finally(() => clearTimeout(id));
+}
+
 async function fetchYahoo(sym, interval, range){
   const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?interval=' + interval + '&range=' + range;
-  for (const wrap of PROXIES){
-    try {
-      const res = await fetch(wrap(url), { cache:'no-store' });
-      if (!res.ok) throw 0;
-      let j = await res.json();
-      if (j && j.contents) j = JSON.parse(j.contents);
-      const r0 = j.chart && j.chart.result && j.chart.result[0];
-      if (!r0 || !r0.timestamp) throw 0;
-      const q = r0.indicators.quote[0];
-      const out = [];
-      r0.timestamp.forEach((t, i) => {
-        if (q.open[i] != null && q.close[i] != null)
-          out.push({ time: t, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
-      });
-      if (out.length > 50) return out;
-    } catch(e){}
-  }
-  return null;
+  // adu semua proxy sekaligus (paralel, timeout 7dtk/proxy) \u2014 pakai yang tercepat berhasil, bukan antre satu-satu
+  const attempts = PROXIES.map(wrap => fetchWithTimeout(wrap(url), 7000).then(async res => {
+    if (!res.ok) throw new Error('status ' + res.status);
+    let j = await res.json();
+    if (j && j.contents) j = JSON.parse(j.contents);
+    const r0 = j.chart && j.chart.result && j.chart.result[0];
+    if (!r0 || !r0.timestamp) throw new Error('data kosong');
+    const q = r0.indicators.quote[0];
+    const out = [];
+    r0.timestamp.forEach((t, i) => {
+      if (q.open[i] != null && q.close[i] != null)
+        out.push({ time: t, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
+    });
+    if (out.length <= 50) throw new Error('candle terlalu sedikit');
+    return out;
+  }));
+  try { return await Promise.any(attempts); } catch(e){ return null; }
 }
 
 async function fetchBinancePAXG(interval){
   try {
-    const res = await fetch('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=' + interval + '&limit=600', { cache:'no-store' });
+    const res = await fetchWithTimeout('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=' + interval + '&limit=600', 7000);
     if (!res.ok) return null;
     const arr = await res.json();
     if (!Array.isArray(arr) || arr.length < 50) return null;
@@ -1184,21 +1189,22 @@ async function fetchCandles(tf){
     { label:'Gold futures GC=F \u00b7 Yahoo',  get: () => fetchYahoo('GC=F',     yCfg.i, yCfg.r) },
     { label:'PAXG/USDT \u00b7 Binance',        get: () => fetchBinancePAXG(bInt) }
   ];
+  // adu ketiga sumber sekaligus (paralel), bukan berurutan \u2014 pilih hasil berdasarkan kesegaran begitu semuanya kembali
+  const settled = await Promise.allSettled(sources.map(s => s.get()));
+  const candidates = settled
+    .map((r, i) => (r.status === 'fulfilled' && r.value) ? { candles: r.value, label: sources[i].label } : null)
+    .filter(Boolean);
+  if (!candidates.length) throw new Error('semua sumber gagal');
+
   const FRESH_SEC = 30 * 60;
-  let bestStale = null;
-  for (const src of sources){
-    const candles = await src.get();
-    if (!candles) continue;
-    const age = Date.now()/1000 - candles[candles.length-1].time;
-    if (age <= FRESH_SEC) return { candles, label: src.label, ageMin: Math.max(0, Math.round(age/60)), stale:false };
-    if (!bestStale || candles[candles.length-1].time > bestStale.candles[bestStale.candles.length-1].time)
-      bestStale = { candles, label: src.label };
+  for (const c of candidates){
+    const age = Date.now()/1000 - c.candles[c.candles.length-1].time;
+    if (age <= FRESH_SEC) return { candles:c.candles, label:c.label, ageMin: Math.max(0, Math.round(age/60)), stale:false };
   }
-  if (bestStale){
-    const age = Date.now()/1000 - bestStale.candles[bestStale.candles.length-1].time;
-    return Object.assign(bestStale, { ageMin: Math.round(age/60), stale:true });
-  }
-  throw new Error('semua sumber gagal');
+  let best = candidates[0];
+  candidates.forEach(c => { if (c.candles[c.candles.length-1].time > best.candles[best.candles.length-1].time) best = c; });
+  const age = Date.now()/1000 - best.candles[best.candles.length-1].time;
+  return { candles: best.candles, label: best.label, ageMin: Math.round(age/60), stale:true };
 }
 
 function clusterSwings(candles){
@@ -1657,13 +1663,19 @@ async function loadAllCharts(){
   $('lwLoad').disabled = true;
   try {
     await ensureLW();
-    // H1 dimuat lebih dulu karena dipakai sebagai pembobot sekunder oleh M5 & M15
-    for (const tf of ['60m', '5m', '15m']){
-      try { lwRawMap[tf] = await fetchCandles(tf); }
-      catch(e){ $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + e.message; }
-    }
-    TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); });
-    $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
+    // Ketiga timeframe di-fetch SEKALIGUS (paralel) \u2014 H1 dirender begitu selesai (dipakai sbg pembobot M5/M15),
+    // M5/M15 menyusul begitu masing-masing selesai, tanpa saling menunggu.
+    const jobs = { '60m': fetchCandles('60m'), '5m': fetchCandles('5m'), '15m': fetchCandles('15m') };
+    try { lwRawMap['60m'] = await jobs['60m']; renderPanel('60m'); }
+    catch(e){ $('lwStatus-60m').textContent = '\u26a0 gagal memuat: ' + e.message; }
+
+    const rest = await Promise.allSettled([jobs['5m'], jobs['15m']]);
+    ['5m', '15m'].forEach((tf, idx) => {
+      const r = rest[idx];
+      if (r.status === 'fulfilled'){ lwRawMap[tf] = r.value; renderPanel(tf); }
+      else { $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + r.reason.message; }
+    });
+    $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat (paralel) \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
   } catch(e){
     $('lwStatusGlobal').textContent = '\u26a0 ' + e.message;
   } finally {

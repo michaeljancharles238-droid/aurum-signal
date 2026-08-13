@@ -297,6 +297,59 @@ tailwind.config = {
       <div id="srcCompBody" class="grid gap-1.5"></div>
     </div>
 
+    <!-- Perbandingan Sumber \u2014 Chart Penuh -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Perbandingan Sumber — Chart Penuh <span class="text-muted text-xs font-body">(S/R + OB + FVG + pola, per sumber)</span></h2>
+        <div class="flex gap-2 items-center flex-wrap">
+          <select id="srcChartTf" style="width:auto">
+            <option value="5m">M5</option>
+            <option value="15m">M15</option>
+            <option value="60m">H1</option>
+          </select>
+          <button id="srcChartLoad" class="btn btn-gold">▶ Muat Perbandingan</button>
+          <button id="srcChartCalib" class="btn">⇄ Kalibrasi Sumber</button>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-3">Timeframe yang sama, dimuat terpisah dari ketiga sumber apa adanya (tanpa auto-pilih pemenang) — supaya kamu bisa bandingkan langsung S/R, Order Block, FVG, dan pola yang dihasilkan tiap sumber.</p>
+      <div id="srcChartStatus" class="text-xs text-muted mb-3">Belum dimuat.</div>
+
+      <div class="grid gap-4">
+        <div id="lwPanel-src-spot" class="lw-panel">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-xs font-semibold uppercase tracking-widest text-gold">XAU/USD Spot (Yahoo)</span>
+            <span id="lwStatus-src-spot" class="text-[11px] text-muted"></span>
+          </div>
+          <div id="lwWrap-src-spot" class="rounded-lg border border-line hidden" style="height:260px"></div>
+          <div id="lwZones-src-spot" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-src-spot" class="hidden mt-1.5 grid gap-1.5"></div>
+          <div id="lwPatterns-src-spot" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
+        </div>
+
+        <div id="lwPanel-src-fut" class="lw-panel">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-xs font-semibold uppercase tracking-widest text-gold">Gold Futures GC=F (Yahoo)</span>
+            <span id="lwStatus-src-fut" class="text-[11px] text-muted"></span>
+          </div>
+          <div id="lwWrap-src-fut" class="rounded-lg border border-line hidden" style="height:260px"></div>
+          <div id="lwZones-src-fut" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-src-fut" class="hidden mt-1.5 grid gap-1.5"></div>
+          <div id="lwPatterns-src-fut" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
+        </div>
+
+        <div id="lwPanel-src-paxg" class="lw-panel">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-xs font-semibold uppercase tracking-widest text-gold">PAXG/USDT (Binance)</span>
+            <span id="lwStatus-src-paxg" class="text-[11px] text-muted"></span>
+          </div>
+          <div id="lwWrap-src-paxg" class="rounded-lg border border-line hidden" style="height:260px"></div>
+          <div id="lwZones-src-paxg" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
+          <div id="lwSmc-src-paxg" class="hidden mt-1.5 grid gap-1.5"></div>
+          <div id="lwPatterns-src-paxg" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Hasil -->
     <div id="resultCard" class="card p-4 hidden">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
@@ -1287,6 +1340,64 @@ async function loadSourceComparison(){
   }
 }
 $('srcCompBtn').onclick = loadSourceComparison;
+
+/* ================= PERBANDINGAN SUMBER \u2014 CHART PENUH ================= */
+// Memanfaatkan renderPanel() yang sama dengan panel M5/M15/H1 \u2014 fungsi itu generik,
+// tinggal diberi "key" berbeda ('src-spot' dst) & data mentah dari SATU sumber spesifik (bukan auto-pilih terbaik).
+const SRC_KEYS = ['spot', 'fut', 'paxg'];
+const SRC_SPECS = {
+  spot: { label:'XAU/USD Spot (Yahoo)',      get: (i,r) => fetchYahoo('XAUUSD=X', i, r) },
+  fut:  { label:'Gold Futures GC=F (Yahoo)', get: (i,r) => fetchYahoo('GC=F', i, r) },
+  paxg: { label:'PAXG/USDT (Binance)',       get: (i,r) => fetchBinancePAXG(r) } // 'r' di sini dipakai sbg interval Binance
+};
+
+async function fetchSingleSource(key, tf){
+  const yCfg = { '5m':{i:'5m', r:'3d'}, '15m':{i:'15m', r:'7d'}, '60m':{i:'60m', r:'1mo'} }[tf];
+  const bInt = { '5m':'5m', '15m':'15m', '60m':'1h' }[tf];
+  const spec = SRC_SPECS[key];
+  const candles = key === 'paxg' ? await fetchBinancePAXG(bInt) : await spec.get(yCfg.i, yCfg.r);
+  if (!candles) throw new Error(spec.label + ' gagal dimuat');
+  const last = candles[candles.length - 1];
+  const ageMin = Math.max(0, Math.round((Date.now()/1000 - last.time) / 60));
+  return { candles, label: spec.label, ageMin, stale: ageMin > 30 };
+}
+
+async function loadSourceCharts(){
+  $('srcChartStatus').textContent = 'Memuat chart dari 3 sumber (paralel)\u2026';
+  $('srcChartLoad').disabled = true;
+  try {
+    await ensureLW();
+    const tf = $('srcChartTf').value;
+    const results = await Promise.allSettled(SRC_KEYS.map(k => fetchSingleSource(k, tf)));
+    let okCount = 0;
+    results.forEach((r, idx) => {
+      const key = 'src-' + SRC_KEYS[idx];
+      if (r.status === 'fulfilled'){ lwRawMap[key] = r.value; renderPanel(key); okCount++; }
+      else { $('lwStatus-' + key).textContent = '\u26a0 gagal: ' + r.reason.message; }
+    });
+    $('srcChartStatus').textContent = okCount
+      ? '\u2713 ' + okCount + '/3 chart sumber dimuat (timeframe ' + tf.toUpperCase() + ') \u00b7 gunakan \u21c4 Kalibrasi Sumber agar sejajar broker.'
+      : '\u26a0 Semua sumber gagal dimuat \u2014 coba lagi sebentar lagi.';
+  } catch(e){
+    $('srcChartStatus').textContent = '\u26a0 ' + e.message;
+  } finally {
+    $('srcChartLoad').disabled = false;
+  }
+}
+$('srcChartLoad').onclick = loadSourceCharts;
+
+$('srcChartCalib').onclick = () => {
+  const broker = parseFloat(($('xauPrice').value || '').replace(',', '.'));
+  if (!broker || broker <= 0){ alert('Isi dulu kolom "Harga XAU saat ini" di panel Analisis Deviasi dengan harga dari broker/TradingView-mu, lalu klik \u21c4 Kalibrasi Sumber lagi.'); return; }
+  let any = false;
+  SRC_KEYS.forEach(k => {
+    const key = 'src-' + k;
+    if (lwRawMap[key]){ lwOffsetMap[key] = broker - lwRawMap[key].candles[lwRawMap[key].candles.length - 1].close; any = true; }
+  });
+  if (!any){ alert('Muat perbandingan dulu (klik \u25b6 Muat Perbandingan).'); return; }
+  SRC_KEYS.forEach(k => renderPanel('src-' + k));
+  $('srcChartStatus').textContent = '\u2713 Kalibrasi diterapkan ke ketiga sumber mengikuti harga ' + broker.toFixed(2) + '.';
+};
 
 function clusterSwings(candles){
   const k = 3, piv = [];

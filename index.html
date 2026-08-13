@@ -1233,8 +1233,12 @@ async function fetchYahoo(sym, interval, range){
     const q = r0.indicators.quote[0];
     const out = [];
     r0.timestamp.forEach((t, i) => {
-      if (q.open[i] != null && q.close[i] != null)
-        out.push({ time: t, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
+      const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
+      // wajib SEMUA field OHLC valid (bukan cuma open/close) \u2014 Yahoo kadang kirim high/low null/undefined
+      // di tengah array, kalau lolos bisa merusak scaling chart & memicu NaN di perhitungan S/R
+      if (o != null && h != null && l != null && c != null &&
+          Number.isFinite(o) && Number.isFinite(h) && Number.isFinite(l) && Number.isFinite(c))
+        out.push({ time: t, open:o, high:h, low:l, close:c });
     });
     if (out.length <= 50) throw new Error('candle terlalu sedikit');
     return out;
@@ -1303,7 +1307,8 @@ function renderSourceComparison(results){
   if (!ok.length){ $('srcCompStatus').textContent = '\u26a0 Semua sumber gagal dimuat \u2014 coba lagi sebentar lagi.'; return; }
 
   const prices = ok.map(r => r.price).sort((a,b) => a - b);
-  const median = prices[Math.floor(prices.length / 2)];
+  const mid = Math.floor(prices.length / 2);
+  const median = prices.length % 2 === 0 ? (prices[mid-1] + prices[mid]) / 2 : prices[mid]; // rata-rata 2 tengah utk jumlah genap, bukan sekadar ambil salah satu
   const freshest = [...ok].sort((a,b) => a.ageMin - b.ageMin)[0];
 
   results.forEach(r => {
@@ -1372,7 +1377,7 @@ async function loadSourceCharts(){
     let okCount = 0;
     results.forEach((r, idx) => {
       const key = 'src-' + SRC_KEYS[idx];
-      if (r.status === 'fulfilled'){ lwRawMap[key] = r.value; renderPanel(key); okCount++; }
+      if (r.status === 'fulfilled'){ lwRawMap[key] = r.value; safeRenderPanel(key); okCount++; }
       else { $('lwStatus-' + key).textContent = '\u26a0 gagal: ' + r.reason.message; }
     });
     $('srcChartStatus').textContent = okCount
@@ -1395,7 +1400,7 @@ $('srcChartCalib').onclick = () => {
     if (lwRawMap[key]){ lwOffsetMap[key] = broker - lwRawMap[key].candles[lwRawMap[key].candles.length - 1].close; any = true; }
   });
   if (!any){ alert('Muat perbandingan dulu (klik \u25b6 Muat Perbandingan).'); return; }
-  SRC_KEYS.forEach(k => renderPanel('src-' + k));
+  SRC_KEYS.forEach(k => safeRenderPanel('src-' + k));
   $('srcChartStatus').textContent = '\u2713 Kalibrasi diterapkan ke ketiga sumber mengikuti harga ' + broker.toFixed(2) + '.';
 };
 
@@ -1771,6 +1776,13 @@ function renderPanel(tf){
   if (!raw) return;
   const off = lwOffsetMap[tf];
   const data = raw.candles.map(c => ({ time: c.time + 7*3600, open: c.open + off, high: c.high + off, low: c.low + off, close: c.close + off }));
+
+  // Guard: tolak data rusak sejak dini dengan pesan jelas, sebelum menjalar jadi NaN di S/R/OB/FVG
+  // dan menjatuhkan seluruh proses render (termasuk panel lain yang menunggu giliran).
+  if (data.length < 20 || !data.every(c => [c.open,c.high,c.low,c.close].every(Number.isFinite))){
+    $('lwStatus-' + tf).textContent = '\u26a0 Data dari ' + raw.label + ' tidak valid/rusak \u2014 coba Muat ulang.';
+    return;
+  }
   const price = data[data.length - 1].close;
 
   const wrapId = 'lwWrap-' + tf;
@@ -1850,6 +1862,16 @@ function renderPanel(tf){
   $('lwStatus-' + tf).textContent = txt;
 }
 
+// Bungkus renderPanel dengan try/catch: satu panel rusak/gagal tidak boleh menjatuhkan panel lain yang menunggu giliran.
+function safeRenderPanel(key){
+  try { renderPanel(key); }
+  catch(e){
+    const el = $('lwStatus-' + key);
+    if (el) el.textContent = '\u26a0 Gagal merender: ' + e.message;
+    console.error('renderPanel(' + key + ') error:', e);
+  }
+}
+
 async function loadAllCharts(){
   $('lwStatusGlobal').textContent = 'Memuat data candle untuk 3 timeframe\u2026';
   $('lwLoad').disabled = true;
@@ -1858,13 +1880,13 @@ async function loadAllCharts(){
     // Ketiga timeframe di-fetch SEKALIGUS (paralel) \u2014 H1 dirender begitu selesai (dipakai sbg pembobot M5/M15),
     // M5/M15 menyusul begitu masing-masing selesai, tanpa saling menunggu.
     const jobs = { '60m': fetchCandles('60m'), '5m': fetchCandles('5m'), '15m': fetchCandles('15m') };
-    try { lwRawMap['60m'] = await jobs['60m']; renderPanel('60m'); }
+    try { lwRawMap['60m'] = await jobs['60m']; safeRenderPanel('60m'); }
     catch(e){ $('lwStatus-60m').textContent = '\u26a0 gagal memuat: ' + e.message; }
 
     const rest = await Promise.allSettled([jobs['5m'], jobs['15m']]);
     ['5m', '15m'].forEach((tf, idx) => {
       const r = rest[idx];
-      if (r.status === 'fulfilled'){ lwRawMap[tf] = r.value; renderPanel(tf); }
+      if (r.status === 'fulfilled'){ lwRawMap[tf] = r.value; safeRenderPanel(tf); }
       else { $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + r.reason.message; }
     });
     $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat (paralel) \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
@@ -1893,7 +1915,7 @@ function drawAnalysisLevelsFor(tf){
 function drawAnalysisLevels(){ TF_LIST.forEach(drawAnalysisLevelsFor); }
 
 $('lwLoad').onclick = loadAllCharts;
-$('patternStrict').onchange = () => { TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); }); };
+$('patternStrict').onchange = () => { TF_LIST.forEach(tf => { if (lwRawMap[tf]) safeRenderPanel(tf); }); };
 $('lwCalib').onclick = () => {
   const broker = parseFloat(($('xauPrice').value || '').replace(',', '.'));
   if (!broker || broker <= 0){ alert('Isi dulu kolom "Harga XAU saat ini" di panel Analisis Deviasi dengan harga dari broker/TradingView-mu, lalu klik \u21c4 Kalibrasi Semua lagi.'); return; }
@@ -1902,7 +1924,7 @@ $('lwCalib').onclick = () => {
     if (lwRawMap[tf]){ lwOffsetMap[tf] = broker - lwRawMap[tf].candles[lwRawMap[tf].candles.length - 1].close; any = true; }
   });
   if (!any){ alert('Muat chart dulu (klik \u25b6 Muat 3 Chart).'); return; }
-  TF_LIST.forEach(tf => { if (lwRawMap[tf]) renderPanel(tf); });
+  TF_LIST.forEach(tf => { if (lwRawMap[tf]) safeRenderPanel(tf); });
   $('lwStatusGlobal').textContent = '\u2713 Kalibrasi diterapkan ke ketiga timeframe (M5, M15, H1) mengikuti harga ' + broker.toFixed(2) + '.';
 };
 

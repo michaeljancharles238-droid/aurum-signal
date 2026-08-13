@@ -279,6 +279,24 @@ tailwind.config = {
       </div>
     </div>
 
+    <!-- Perbandingan Sumber Data -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Perbandingan Sumber Data <span class="text-muted text-xs font-body">(cek selisih harga antar sumber)</span></h2>
+        <div class="flex gap-2 items-center">
+          <select id="srcCompTf" style="width:auto">
+            <option value="5m">M5</option>
+            <option value="15m">M15</option>
+            <option value="60m">H1</option>
+          </select>
+          <button id="srcCompBtn" class="btn btn-gold">🔍 Bandingkan</button>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-2">Harga close candle terakhir dari ketiga sumber ditampilkan apa adanya (tidak dipilihkan pemenang) — supaya kamu bisa lihat sendiri besarnya selisih. <span class="text-gold">★ emas</span> = sumber yang sedang dipakai di Chart Analisis (paling segar).</p>
+      <div id="srcCompStatus" class="text-xs text-muted mb-2">Belum dibandingkan.</div>
+      <div id="srcCompBody" class="grid gap-1.5"></div>
+    </div>
+
     <!-- Hasil -->
     <div id="resultCard" class="card p-4 hidden">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
@@ -1206,6 +1224,69 @@ async function fetchCandles(tf){
   const age = Date.now()/1000 - best.candles[best.candles.length-1].time;
   return { candles: best.candles, label: best.label, ageMin: Math.round(age/60), stale:true };
 }
+
+/* ================= PERBANDINGAN SUMBER DATA ================= */
+async function fetchSourceComparison(tf){
+  const yCfg = { '5m':{i:'5m', r:'3d'}, '15m':{i:'15m', r:'7d'}, '60m':{i:'60m', r:'1mo'} }[tf];
+  const bInt = { '5m':'5m', '15m':'15m', '60m':'1h' }[tf];
+  const specs = [
+    { key:'spot', label:'XAU/USD Spot (Yahoo)',      get: () => fetchYahoo('XAUUSD=X', yCfg.i, yCfg.r) },
+    { key:'fut',  label:'Gold Futures GC=F (Yahoo)', get: () => fetchYahoo('GC=F', yCfg.i, yCfg.r) },
+    { key:'paxg', label:'PAXG/USDT (Binance)',       get: () => fetchBinancePAXG(bInt) }
+  ];
+  const settled = await Promise.allSettled(specs.map(s => s.get()));
+  return specs.map((s, i) => {
+    const r = settled[i];
+    if (r.status !== 'fulfilled' || !r.value) return { key:s.key, label:s.label, ok:false };
+    const last = r.value[r.value.length - 1];
+    const ageMin = Math.max(0, Math.round((Date.now()/1000 - last.time) / 60));
+    return { key:s.key, label:s.label, ok:true, price:last.close, ageMin };
+  });
+}
+
+function renderSourceComparison(results){
+  const ok = results.filter(r => r.ok);
+  const box = $('srcCompBody'); box.innerHTML = '';
+  if (!ok.length){ $('srcCompStatus').textContent = '\u26a0 Semua sumber gagal dimuat \u2014 coba lagi sebentar lagi.'; return; }
+
+  const prices = ok.map(r => r.price).sort((a,b) => a - b);
+  const median = prices[Math.floor(prices.length / 2)];
+  const freshest = [...ok].sort((a,b) => a.ageMin - b.ageMin)[0];
+
+  results.forEach(r => {
+    if (!r.ok){
+      box.innerHTML += '<div class="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-line text-xs opacity-50">' +
+        '<span class="flex-1">' + r.label + '</span><span style="color:var(--sell)">\u2715 gagal dimuat</span></div>';
+      return;
+    }
+    const delta = r.price - median;
+    const deltaPips = toPips(Math.abs(delta));
+    const deltaColor = Math.abs(delta) < 0.5 ? 'var(--muted)' : (delta > 0 ? 'var(--sell)' : 'var(--buy)');
+    const isUsed = r.key === freshest.key;
+    box.innerHTML += '<div class="flex items-center gap-2 px-2.5 py-2 rounded-lg border flex-wrap text-xs" style="border-color:' + (isUsed ? 'var(--gold)' : 'var(--line)') + ';background:var(--surface2)">' +
+      '<span class="flex-1 font-semibold">' + r.label + (isUsed ? ' <span class="text-gold">\u2605 dipakai chart</span>' : '') + '</span>' +
+      '<span class="font-mono text-base">' + r.price.toFixed(2) + '</span>' +
+      '<span class="text-muted">' + r.ageMin + ' mnt lalu</span>' +
+      '<span class="font-mono" style="color:' + deltaColor + '">' + (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' (' + deltaPips + 'p) vs median</span>' +
+      '</div>';
+  });
+  $('srcCompStatus').textContent = '\u2713 Dibandingkan pukul ' + new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', hour:'2-digit', minute:'2-digit', hour12:false }).format(new Date()) + ' WIB';
+}
+
+async function loadSourceComparison(){
+  $('srcCompStatus').textContent = 'Membandingkan ketiga sumber\u2026';
+  $('srcCompBtn').disabled = true;
+  try {
+    const tf = $('srcCompTf').value;
+    const results = await fetchSourceComparison(tf);
+    renderSourceComparison(results);
+  } catch(e){
+    $('srcCompStatus').textContent = '\u26a0 ' + e.message;
+  } finally {
+    $('srcCompBtn').disabled = false;
+  }
+}
+$('srcCompBtn').onclick = loadSourceComparison;
 
 function clusterSwings(candles){
   const k = 3, piv = [];

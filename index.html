@@ -1193,7 +1193,7 @@ document.querySelectorAll('.tv-int').forEach(b => b.onclick = () => { tvInterval
 const TF_LIST = ['5m', '15m', '60m'];
 let lwCharts = {}, lwSeriesMap = {}, lwAnalysisLinesMap = { '5m':[], '15m':[], '60m':[] };
 let lwRawMap = { '5m':null, '15m':null, '60m':null };
-let lwOffsetMap = { '5m':0, '15m':0, '60m':0 };
+let lwOffsetMap = { '5m':0, '15m':0, '60m':0, 'src-spot':0, 'src-fut':0, 'src-paxg':0 };
 
 async function ensureLW(){
   if (window.LightweightCharts) return;
@@ -1233,12 +1233,15 @@ async function fetchYahoo(sym, interval, range){
     const q = r0.indicators.quote[0];
     const out = [];
     r0.timestamp.forEach((t, i) => {
-      const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
-      // wajib SEMUA field OHLC valid (bukan cuma open/close) \u2014 Yahoo kadang kirim high/low null/undefined
-      // di tengah array, kalau lolos bisa merusak scaling chart & memicu NaN di perhitungan S/R
-      if (o != null && h != null && l != null && c != null &&
-          Number.isFinite(o) && Number.isFinite(h) && Number.isFinite(l) && Number.isFinite(c))
-        out.push({ time: t, open:o, high:h, low:l, close:c });
+      const o = q.open[i], c = q.close[i];
+      let h = q.high[i], l = q.low[i];
+      // open & close WAJIB ada dan berupa angka \u2014 tanpa ini candle memang tidak berguna, dibuang.
+      if (o == null || c == null || !Number.isFinite(o) || !Number.isFinite(c)) return;
+      // high/low kadang kosong (kuotasi forex-style Yahoo) \u2014 DIPERBAIKI dari open/close, bukan dibuang,
+      // supaya data tetap padat (candle yang dibuang membuat chart berlubang & S/R jadi tidak akurat).
+      if (h == null || !Number.isFinite(h)) h = Math.max(o, c);
+      if (l == null || !Number.isFinite(l)) l = Math.min(o, c);
+      out.push({ time: t, open:o, high:h, low:l, close:c });
     });
     if (out.length <= 50) throw new Error('candle terlalu sedikit');
     return out;
@@ -1774,7 +1777,7 @@ function updateSmcBiasNote(){
 function renderPanel(tf){
   const raw = lwRawMap[tf];
   if (!raw) return;
-  const off = lwOffsetMap[tf];
+  const off = lwOffsetMap[tf] || 0; // pengaman: kunci baru yang belum pernah dikalibrasi default ke 0, bukan undefined/NaN
   const data = raw.candles.map(c => ({ time: c.time + 7*3600, open: c.open + off, high: c.high + off, low: c.low + off, close: c.close + off }));
 
   // Guard: tolak data rusak sejak dini dengan pesan jelas, sebelum menjalar jadi NaN di S/R/OB/FVG

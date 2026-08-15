@@ -1222,12 +1222,12 @@ function fetchWithTimeout(url, ms){
 async function fetchYahoo(sym, interval, range){
   const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?interval=' + interval + '&range=' + range;
   // adu semua proxy sekaligus (paralel, timeout 7dtk/proxy) \u2014 pakai yang tercepat berhasil, bukan antre satu-satu
-  const attempts = PROXIES.map(wrap => fetchWithTimeout(wrap(url), 7000).then(async res => {
-    if (!res.ok) throw new Error('status ' + res.status);
+  const attempts = PROXIES.map((wrap, idx) => fetchWithTimeout(wrap(url), 7000).then(async res => {
+    if (!res.ok) throw new Error('proxy#' + (idx+1) + ' HTTP ' + res.status);
     let j = await res.json();
     if (j && j.contents) j = JSON.parse(j.contents);
     const r0 = j.chart && j.chart.result && j.chart.result[0];
-    if (!r0 || !r0.timestamp) throw new Error('data kosong');
+    if (!r0 || !r0.timestamp) throw new Error('proxy#' + (idx+1) + ' data kosong (kemungkinan simbol diblokir/limit Yahoo)');
     const q = r0.indicators.quote[0];
     const out = [];
     r0.timestamp.forEach((t, i) => {
@@ -1241,20 +1241,25 @@ async function fetchYahoo(sym, interval, range){
       if (l == null || !Number.isFinite(l)) l = Math.min(o, c);
       out.push({ time: t, open:o, high:h, low:l, close:c });
     });
-    if (out.length <= 50) throw new Error('candle terlalu sedikit');
+    if (out.length <= 50) throw new Error('proxy#' + (idx+1) + ' candle tersisa cuma ' + out.length + ' (min 50)');
     return out;
-  }));
-  try { return await Promise.any(attempts); } catch(e){ return null; }
+  }).catch(err => { throw (err.name === 'AbortError' ? new Error('proxy#' + (idx+1) + ' timeout >7dtk') : err); }));
+
+  try {
+    return await Promise.any(attempts);
+  } catch(aggErr){
+    // AggregateError.errors berisi alasan tiap proxy \u2014 gabungkan jadi satu pesan yang bisa dibaca
+    const reasons = (aggErr.errors || []).map(e => e.message).join(' \u00b7 ');
+    throw new Error(sym + ' \u2014 semua proxy gagal: ' + (reasons || 'tidak diketahui'));
+  }
 }
 
 async function fetchBinancePAXG(interval){
-  try {
-    const res = await fetchWithTimeout('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=' + interval + '&limit=600', 7000);
-    if (!res.ok) return null;
-    const arr = await res.json();
-    if (!Array.isArray(arr) || arr.length < 50) return null;
-    return arr.map(k => ({ time: Math.floor(k[0]/1000), open:+k[1], high:+k[2], low:+k[3], close:+k[4] }));
-  } catch(e){ return null; }
+  const res = await fetchWithTimeout('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=' + interval + '&limit=600', 7000);
+  if (!res.ok) throw new Error('Binance HTTP ' + res.status);
+  const arr = await res.json();
+  if (!Array.isArray(arr) || arr.length < 50) throw new Error('Binance candle tidak cukup (' + (Array.isArray(arr) ? arr.length : 0) + ')');
+  return arr.map(k => ({ time: Math.floor(k[0]/1000), open:+k[1], high:+k[2], low:+k[3], close:+k[4] }));
 }
 
 async function fetchCandles(tf){

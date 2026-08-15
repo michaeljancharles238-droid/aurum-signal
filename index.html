@@ -235,7 +235,7 @@ tailwind.config = {
 
       <div class="mb-3 p-3 rounded-lg border border-line" style="background:var(--surface2)">
         <div class="text-xs font-semibold uppercase tracking-widest text-gold mb-1">Zona SMC — Area Timing Entry (wajib searah bias)</div>
-        <div id="smcBiasNote" class="text-[11px] text-muted">Belum ada bias aktif — semua zona ditampilkan setara.</div>
+        <div id="smcBiasNote" class="smc-bias-note text-[11px] text-muted">Belum ada bias aktif — semua zona ditampilkan setara.</div>
       </div>
 
       <div class="grid gap-4">
@@ -293,8 +293,19 @@ tailwind.config = {
           <button id="srcChartCalib" class="btn">⇄ Kalibrasi Sumber</button>
         </div>
       </div>
+      <p class="text-xs text-muted mb-2">
+        Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing timeframe terpilih + swing H1 (bila panel utama sudah dimuat) + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
+        Digabung dalam satu daftar bersama <b class="text-gold">Order Block</b> (entry = sisi dangkal, 50% = ekuilibrium/CE) dan <b class="text-gold">Fair Value Gap</b>, sesuai posisi harga masing-masing.
+        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji) dan struktur SMC (BOS/CHoCH) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas. Mengikuti pengaturan filter "Hanya pola berkonfluensi" di kartu Chart Analisis di atas.
+        <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, <span class="text-gold">emas = Order Block</span>, garis solid = Entry/TP/SL analisismu.
+      </p>
       <p class="text-xs text-muted mb-3">Timeframe yang sama, dimuat terpisah dari ketiga sumber apa adanya (tanpa auto-pilih pemenang) — supaya kamu bisa bandingkan langsung S/R, Order Block, FVG, dan pola yang dihasilkan tiap sumber.</p>
       <div id="srcChartStatus" class="text-xs text-muted mb-3">Belum dimuat.</div>
+
+      <div class="mb-3 p-3 rounded-lg border border-line" style="background:var(--surface2)">
+        <div class="text-xs font-semibold uppercase tracking-widest text-gold mb-1">Zona SMC — Area Timing Entry (wajib searah bias)</div>
+        <div class="smc-bias-note text-[11px] text-muted">Belum ada bias aktif — semua zona ditampilkan setara.</div>
+      </div>
 
       <div class="grid gap-4">
         <div id="lwPanel-src-spot" class="lw-panel">
@@ -329,6 +340,11 @@ tailwind.config = {
           <div id="lwSmc-src-paxg" class="hidden mt-1.5 grid gap-1.5"></div>
           <div id="lwPatterns-src-paxg" class="hidden mt-1.5 grid gap-1 text-[11px]"></div>
         </div>
+      </div>
+
+      <div class="text-[11px] text-muted mt-3 leading-relaxed">
+        Entry model: <b class="text-gold">konservatif</b> = tunggu harga masuk zona lalu ada reaksi (candle penolakan) · <b class="text-gold">agresif</b> = limit order di 50% OB.
+        SL selalu di luar sisi seberang zona. Prioritaskan <span class="text-gold">FRESH</span>; zona <span class="text-muted">TESTED</span> lebih lemah.
       </div>
     </div>
 
@@ -1684,13 +1700,15 @@ function renderSmcZones(tf, zones, price, bias){
 }
 
 function updateSmcBiasNote(){
-  const el = $('smcBiasNote'); if (!el) return;
+  const els = document.querySelectorAll('.smc-bias-note'); if (!els.length) return;
+  let text;
   if (lastAnalysis && lastAnalysis.bias && lastAnalysis.bias !== 'NETRAL'){
     const arrow = lastAnalysis.bias === 'BUY' ? '\u25b2 (hijau)' : '\u25bc (merah)';
-    el.textContent = 'Bias saat ini: ' + lastAnalysis.bias + ' \u2014 prioritaskan zona ' + arrow + ' untuk timing entry; zona berlawanan diredupkan, hanya referensi struktur.';
+    text = 'Bias saat ini: ' + lastAnalysis.bias + ' \u2014 prioritaskan zona ' + arrow + ' untuk timing entry; zona berlawanan diredupkan, hanya referensi struktur.';
   } else {
-    el.textContent = 'Belum ada bias aktif (jalankan Analisis Sekarang) \u2014 semua zona ditampilkan setara.';
+    text = 'Belum ada bias aktif (jalankan Analisis Sekarang) \u2014 semua zona ditampilkan setara.';
   }
+  els.forEach(el => { el.textContent = text; });
 }
 function renderPanel(tf){
   const raw = lwRawMap[tf];

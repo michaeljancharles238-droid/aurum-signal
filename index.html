@@ -1672,7 +1672,12 @@ function buildSmcZones(obList, fvgList, price){
   const bullFVG = fvgList.filter(f => f.dir === 'buy').map(z => Object.assign({}, z, { kind:'FVG' }));
   const byDist = (a,b) => distPips(a) - distPips(b);
   bearOB.sort(byDist); bullOB.sort(byDist); bearFVG.sort(byDist); bullFVG.sort(byDist);
-  return { bear: [...bearOB, ...bearFVG], bull: [...bullOB, ...bullFVG] };
+
+  // FVG dibatasi maks 3/arah, FRESH diprioritaskan di atas TESTED (yang sudah terisi ulang = kurang actionable
+  // untuk entry baru) \u2014 tanpa batas ini daftar bisa banjir belasan gap di pasar yang sedang tren kuat.
+  const pickFvg = list => [...list.filter(z => !z.tested), ...list.filter(z => z.tested)].slice(0, 3);
+
+  return { bear: [...bearOB, ...pickFvg(bearFVG)], bull: [...bullOB, ...pickFvg(bullFVG)] };
 }
 
 function renderSmcZones(tf, zones, price, bias){

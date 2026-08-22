@@ -1937,11 +1937,10 @@ function renderStatsEditor(){
   });
   box.querySelectorAll('.stat-in').forEach(inp => inp.onchange = () => {
     let v = parseFloat(inp.value.replace(',', '.'));
-    if (isNaN(v) || v < 0){ renderStatsEditor(); return; } // batalkan input tidak valid, kembalikan tampilan lama
-    if (v > 200){ // $200/oz = 2000 pips sekali gerak — di luar batas wajar untuk data ekonomi biasa, kemungkinan salah ketik
-      alert('Nilai $' + v + ' terlalu besar untuk pergerakan wajar satu event (setara ' + toPips(v) + ' pips). Dibatalkan — cek kembali angkanya.');
-      renderStatsEditor();
-      return;
+    if (isNaN(v) || v < 0){ renderStatsEditor(); return; } // batalkan input yang jelas tidak valid (bukan angka/negatif)
+    if (v > 200){ // $200/oz = 2000 pips \u2014 jauh di atas pergerakan wajar historis, tapi bisa saja disengaja
+      const ok = confirm('Nilai $' + v + ' setara ' + toPips(v) + ' pips \u2014 jauh di atas pergerakan wajar historis untuk satu event (biasanya di bawah 500 pips bahkan untuk NFP/CPI paling ekstrem).\n\nTetap simpan angka ini kalau kamu memang punya alasan (data historismu sendiri, atau kondisi pasar sedang luar biasa volatil)?');
+      if (!ok){ renderStatsEditor(); return; }
     }
     STATS[+inp.dataset.i].move[+inp.dataset.f] = v;
     safeStore.set('aurum_stats', STATS);

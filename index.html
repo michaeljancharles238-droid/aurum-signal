@@ -224,7 +224,7 @@ tailwind.config = {
       <p class="text-xs text-muted mb-2">
         Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing timeframe aktif + swing H1 + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
         Digabung dalam satu daftar bersama <b class="text-gold">Order Block</b> (entry = sisi dangkal, 50% = ekuilibrium/CE) dan <b class="text-gold">Fair Value Gap</b>, sesuai posisi harga masing-masing.
-        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji) dan struktur SMC (BOS/CHoCH) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas.
+        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji), struktur SMC (BOS/CHoCH), dan <b class="text-gold">RSI Divergence</b> (momentum, independen dari price action) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas.
         <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, <span class="text-gold">emas = Order Block</span>, garis solid = Entry/TP/SL analisismu.
       </p>
       <label class="flex items-center gap-2 text-xs text-muted cursor-pointer select-none mb-2">
@@ -296,7 +296,7 @@ tailwind.config = {
       <p class="text-xs text-muted mb-2">
         Level dihitung dengan <b class="text-gold">Confluence Engine</b>: swing timeframe terpilih + swing H1 (bila panel utama sudah dimuat) + High/Low/Close kemarin (PDH/PDL) + pivot harian + angka bulat + range sesi Asia.
         Digabung dalam satu daftar bersama <b class="text-gold">Order Block</b> (entry = sisi dangkal, 50% = ekuilibrium/CE) dan <b class="text-gold">Fair Value Gap</b>, sesuai posisi harga masing-masing.
-        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji) dan struktur SMC (BOS/CHoCH) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas. Mengikuti pengaturan filter "Hanya pola berkonfluensi" di kartu Chart Analisis di atas.
+        <b class="text-gold">Pattern Engine</b> mendeteksi candlestick (Engulfing/Star/Pin Bar/Doji), struktur SMC (BOS/CHoCH), dan <b class="text-gold">RSI Divergence</b> (momentum, independen dari price action) — ★ berarti pola itu berkonfluensi dengan salah satu zona di atas. Mengikuti pengaturan filter "Hanya pola berkonfluensi" di kartu Chart Analisis di atas.
         <span style="color:var(--sell)">Merah = resistance</span>, <span style="color:var(--buy)">hijau = support</span>, <span class="text-gold">emas = Order Block</span>, garis solid = Entry/TP/SL analisismu.
       </p>
       <p class="text-xs text-muted mb-3">Timeframe yang sama, dimuat terpisah dari ketiga sumber apa adanya (tanpa auto-pilih pemenang) — supaya kamu bisa bandingkan langsung S/R, Order Block, FVG, dan pola yang dihasilkan tiap sumber.</p>
@@ -1173,6 +1173,7 @@ function loadTV(){
     locale: 'id',
     allow_symbol_change: false,
     hide_side_toolbar: true,
+    studies: ['RSI@tv-basicstudies'], // RSI(14) otomatis dimuat sbg subplot \u2014 konfirmasi momentum independen dari price action
     support_host: 'https://www.tradingview.com'
   });
   box.appendChild(s);
@@ -1503,6 +1504,52 @@ function detectStructure(data){
   return out;
 }
 
+// RSI(14) klasik (Wilder smoothing) \u2014 mengukur MOMENTUM, bukan struktur harga; independen dari S/R/OB/FVG/pola candlestick.
+function calcRSI(closes, period){
+  const rsi = new Array(closes.length).fill(null);
+  if (closes.length <= period) return rsi;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++){
+    const diff = closes[i] - closes[i-1];
+    if (diff >= 0) gains += diff; else losses -= diff;
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  rsi[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < closes.length; i++){
+    const diff = closes[i] - closes[i-1];
+    const gain = diff > 0 ? diff : 0, loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return rsi;
+}
+
+// Divergence: harga bikin ekstrem baru tapi RSI tidak ikut \u2014 tanda momentum melemah SEBELUM terlihat di price action.
+// Dicek hanya pada 2 swing terakhir & harus masih "baru" (15 candle terakhir) supaya tetap actionable, bukan histori basi.
+function detectRsiDivergence(data){
+  const closes = data.map(c => c.close);
+  const rsi = calcRSI(closes, 14);
+  const sw = findSwingSeq(data, 2);
+  const highs = sw.filter(s => s.type === 'H' && rsi[s.i] != null);
+  const lows  = sw.filter(s => s.type === 'L' && rsi[s.i] != null);
+  const out = [], n = data.length;
+
+  if (highs.length >= 2){
+    const a = highs[highs.length-2], b = highs[highs.length-1];
+    if (b.i >= n - 15 && b.price > a.price && rsi[b.i] < rsi[a.i])
+      out.push({ i:b.i, time:data[b.i].time, price:b.price, dir:'sell', type:'Bearish RSI Divergence',
+        desc:'Harga bikin high baru tapi momentum (RSI) melemah \u2014 tanda tren rentan berbalik turun' });
+  }
+  if (lows.length >= 2){
+    const a = lows[lows.length-2], b = lows[lows.length-1];
+    if (b.i >= n - 15 && b.price < a.price && rsi[b.i] > rsi[a.i])
+      out.push({ i:b.i, time:data[b.i].time, price:b.price, dir:'buy', type:'Bullish RSI Divergence',
+        desc:'Harga bikin low baru tapi momentum (RSI) menguat \u2014 tanda tren rentan berbalik naik' });
+  }
+  return out;
+}
+
 // Zona dianggap TESTED kalau ada candle setelah pembentukannya yang range-nya tumpang tindih dengan zona (harga sudah kembali menyentuhnya)
 function isZoneTested(data, originIdx, top, bottom){
   for (let k = originIdx + 1; k < data.length; k++){
@@ -1605,7 +1652,8 @@ function detectPatterns(data, conf, strict, obList){
   const star   = detectStarPatterns(data).map(p => Object.assign(p, { cat:'candle' }));
   const struct = detectStructure(data).map(p => Object.assign(p, { cat:'structure' }));
   const fvg    = detectFVG(data).map(p => Object.assign(p, { cat:'fvg' }));
-  let all = [...cand, ...star, ...struct, ...fvg];
+  const rsiDiv = detectRsiDivergence(data).map(p => Object.assign(p, { cat:'momentum' }));
+  let all = [...cand, ...star, ...struct, ...fvg, ...rsiDiv];
 
   const obZones = (obList || []).flatMap(ob => [
     { p: ob.entryPrice, score: 5, kind:'OB' }, { p: ob.fiftyPrice, score: 6, kind:'OB' }
@@ -1622,7 +1670,7 @@ function detectPatterns(data, conf, strict, obList){
 
   // mode ketat: sinyal struktur (BOS/CHoCH) selalu tampil karena sudah bermakna dengan sendirinya;
   // pola candlestick/FVG hanya tampil jika berkonfluensi dengan zona S/R/OB \u2014 mengurangi sinyal palsu
-  if (strict) all = all.filter(p => p.cat === 'structure' || p.confluence);
+  if (strict) all = all.filter(p => p.cat === 'structure' || p.cat === 'momentum' || p.confluence);
 
   all.sort((a,b) => b.i - a.i);
   return all.slice(0, 6);

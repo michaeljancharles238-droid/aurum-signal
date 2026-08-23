@@ -1564,12 +1564,20 @@ function detectRsiDivergence(data){
   return out;
 }
 
-// Zona dianggap TESTED kalau ada candle setelah pembentukannya yang range-nya tumpang tindih dengan zona (harga sudah kembali menyentuhnya)
-function isZoneTested(data, originIdx, top, bottom){
+// Status zona 3-tingkat:
+// 'fresh'  = belum pernah disentuh sama sekali sejak terbentuk
+// 'held'   = pernah disentuh tapi harga TIDAK PERNAH close menembus sisi yang seharusnya menahan \u2014 zona terbukti bertahan
+// 'broken' = ada candle yang close menembus habis sisi penahan \u2014 zona resmi tidak berlaku lagi (jangan dipakai retest)
+// dir='buy' = zona support (menahan dari bawah, jebol kalau close < bottom); dir='sell' = zona resistance (jebol kalau close > top)
+function zoneStatus(data, originIdx, top, bottom, dir){
+  let touched = false;
   for (let k = originIdx + 1; k < data.length; k++){
-    if (data[k].high >= bottom && data[k].low <= top) return true;
+    const c = data[k];
+    if (c.high >= bottom && c.low <= top) touched = true;
+    if (dir === 'buy'  && c.close < bottom) return 'broken';
+    if (dir === 'sell' && c.close > top)    return 'broken';
   }
-  return false;
+  return touched ? 'held' : 'fresh';
 }
 
 // Sweep: candle origin OB membuat ekstrem baru (high/low) melewati 10 candle sebelumnya \u2014 tanda liquidity grab sebelum reversal
@@ -1601,13 +1609,13 @@ function detectFVG(data){
     if (a.high < b.low){
       const top = b.low, bottom = a.high;
       out.push({ i, time:data[i-1].time, top, bottom, price:(top+bottom)/2, dir:'buy',
-        tested: isZoneTested(data, i, top, bottom),
+        status: zoneStatus(data, i, top, bottom, 'buy'),
         type:'Fair Value Gap (Bullish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai support' });
     }
     if (a.low > b.high){
       const top = a.low, bottom = b.high;
       out.push({ i, time:data[i-1].time, top, bottom, price:(top+bottom)/2, dir:'sell',
-        tested: isZoneTested(data, i, top, bottom),
+        status: zoneStatus(data, i, top, bottom, 'sell'),
         type:'Fair Value Gap (Bearish)', desc:'Celah harga \u2014 area imbalance berpotensi ditarik kembali sebagai resistance' });
     }
   }
@@ -1637,7 +1645,7 @@ function detectOrderBlocks(data){
       i:found, time:ob.time, top, bottom, fifty, dir:s.dir,
       entryPrice: s.dir === 'buy' ? top : bottom,
       fiftyPrice: fifty,
-      tested: isZoneTested(data, found, top, bottom),
+      status: zoneStatus(data, found, top, bottom, s.dir),
       sweep: hasSweepBefore(data, found, 10),
       gap: hasGapAfter(data, found, s.dir)
     });
@@ -1726,6 +1734,14 @@ function renderPatternList(tf, patterns, lastTime){
   });
 }
 
+// Helper badge terpusat: FRESH (emas) = belum tersentuh · HELD (hijau) = tersentuh tapi terbukti bertahan, masih layak dipercaya
+// BROKEN (merah, selalu tampil mencolok apapun arah zonanya) = sudah tertembus, JANGAN dipakai retest lagi.
+function statusBadgeHtml(status){
+  if (status === 'fresh')  return '<span class="text-gold font-semibold">FRESH</span>';
+  if (status === 'held')   return '<span style="color:var(--buy)" class="font-semibold">TESTED\u2013HELD</span>';
+  return '<span style="color:var(--sell)" class="font-semibold">TESTED\u2013BROKEN \u26a0</span>';
+}
+
 function buildSmcZones(obList, fvgList, price){
   const distPips = z => toPips(Math.min(Math.abs(price - z.top), Math.abs(price - z.bottom)));
   const bearOB  = obList.filter(o => o.dir === 'sell').map(z => Object.assign({}, z, { kind:'OB' }));
@@ -1735,9 +1751,10 @@ function buildSmcZones(obList, fvgList, price){
   const byDist = (a,b) => distPips(a) - distPips(b);
   bearOB.sort(byDist); bullOB.sort(byDist); bearFVG.sort(byDist); bullFVG.sort(byDist);
 
-  // FVG dibatasi maks 3/arah, FRESH diprioritaskan di atas TESTED (yang sudah terisi ulang = kurang actionable
-  // untuk entry baru) \u2014 tanpa batas ini daftar bisa banjir belasan gap di pasar yang sedang tren kuat.
-  const pickFvg = list => [...list.filter(z => !z.tested), ...list.filter(z => z.tested)].slice(0, 3);
+  // FVG dibatasi maks 3/arah, urutan prioritas FRESH \u2192 HELD \u2192 BROKEN (yang broken paling tidak actionable,
+  // ditaruh paling akhir supaya slot yang terbatas terisi zona yang lebih layak dulu).
+  const rank = { fresh:0, held:1, broken:2 };
+  const pickFvg = list => [...list].sort((a,b) => rank[a.status]-rank[b.status]).slice(0, 3);
 
   return { bear: [...bearOB, ...pickFvg(bearFVG)], bull: [...bullOB, ...pickFvg(bullFVG)] };
 }
@@ -1748,14 +1765,15 @@ function renderSmcZones(tf, zones, price, bias){
     const distp = toPips(Math.min(Math.abs(price - z.top), Math.abs(price - z.bottom)));
     const arrow = z.dir === 'sell' ? '\u25bc' : '\u25b2';
     const dimAgainstBias = bias && ((bias === 'BUY' && z.dir === 'sell') || (bias === 'SELL' && z.dir === 'buy'));
-    const freshBadge = z.tested ? '<span class="text-muted">TESTED</span>' : '<span class="text-gold font-semibold">FRESH</span>';
+    const freshBadge = statusBadgeHtml(z.status);
     let right;
     if (z.kind === 'OB'){
       right = '<div class="text-[10px] text-right leading-snug shrink-0">\u00b7 50%: <span class="text-gold">' + z.fifty.toFixed(2) + '</span><br>' +
         '\u00b7 ' + (z.sweep ? '<span style="color:' + dirColor + '">\u2713sweep</span>' : '<span class="text-muted">\u2717sweep</span>') + ' ' +
         (z.gap ? '<span style="color:' + dirColor + '">\u2713gap</span>' : '<span class="text-muted">\u2717gap</span>') + '</div>';
     } else {
-      right = '<div class="text-[10px] text-muted text-right shrink-0">\u00b7 ' + (z.tested ? 'sudah tersentuh' : 'belum terisi') + '</div>';
+      const fvgNote = z.status === 'broken' ? 'sudah tertembus' : z.status === 'held' ? 'tersentuh, masih valid' : 'belum terisi';
+      right = '<div class="text-[10px] text-muted text-right shrink-0">\u00b7 ' + fvgNote + '</div>';
     }
     return '<div class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border flex-wrap" style="border-color:' + dirColor + ';background:var(--surface2);opacity:' + (dimAgainstBias ? '.55' : '1') + '">' +
       '<div class="text-xs">' +
@@ -1960,8 +1978,8 @@ function summarizePanelForHistory(tf){
     label: raw.label,
     R: conf.above.map((z,i) => ({ lbl:'R'+(i+1), price:+z.p.toFixed(2), score:z.score, tags:z.tags })),
     S: conf.below.map((z,i) => ({ lbl:'S'+(i+1), price:+z.p.toFixed(2), score:z.score, tags:z.tags })),
-    smcBear: smc.bear.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), tested:z.tested, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
-    smcBull: smc.bull.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), tested:z.tested, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
+    smcBear: smc.bear.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), status:z.status, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
+    smcBull: smc.bull.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), status:z.status, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
     patterns: patterns.map(p => ({ type:p.type, dir:p.dir, confluence:p.confluence, confluenceLabel:p.confluenceLabel, desc:p.desc, agoMin: Math.max(0, Math.round((lastTime - p.time)/60)) }))
   };
 }
@@ -2064,8 +2082,8 @@ function renderChartHistory(){
           [...p.smcBear, ...p.smcBull].forEach(z => {
             const arrow = z.dir === 'sell' ? '\u25bc' : '\u25b2';
             const col = z.dir === 'sell' ? sell : buy;
-            const status = z.tested ? 'TESTED' : 'FRESH';
-            const extra = z.kind === 'OB' ? (status + ' \u00b7 50%:' + z.fifty + ' \u00b7 ' + (z.sweep?'\u2713':'\u2717') + 'sweep ' + (z.gap?'\u2713':'\u2717') + 'gap') : status;
+            const statusTxt = z.status === 'fresh' ? 'FRESH' : z.status === 'held' ? 'TESTED\u2013HELD' : 'TESTED\u2013BROKEN \u26a0';
+            const extra = z.kind === 'OB' ? (statusTxt + ' \u00b7 50%:' + z.fifty + ' \u00b7 ' + (z.sweep?'\u2713':'\u2717') + 'sweep ' + (z.gap?'\u2713':'\u2717') + 'gap') : statusTxt;
             html += histBadgeRow(z.kind + arrow, z.bottom.toFixed(2) + '\u2013' + z.top.toFixed(2), extra, col);
           });
           html += '</div>';

@@ -218,7 +218,7 @@ tailwind.config = {
         <h2 class="font-display text-lg font-semibold">Chart Analisis <span class="text-muted text-xs font-body">(3 timeframe sekaligus — S/R otomatis + level Entry/TP/SL)</span></h2>
         <div class="flex gap-2 items-center flex-wrap">
           <button id="lwLoad" class="btn btn-gold">▶ Muat 3 Chart</button>
-          <button id="lwCalib" class="btn" title="Selaraskan ketiga chart dengan harga broker (isi kolom 'Harga XAU saat ini' dulu)">⇄ Kalibrasi Semua</button>
+          <button id="lwCalib" class="btn" title="Sudah dikalibrasi otomatis saat Muat Chart. Pakai ini untuk fine-tune manual kalau angkanya masih beda dengan broker-mu (isi 'Harga XAU saat ini' dulu).">⇄ Kalibrasi Semua</button>
         </div>
       </div>
       <p class="text-xs text-muted mb-2">
@@ -231,7 +231,7 @@ tailwind.config = {
         <input type="checkbox" id="patternStrict" checked style="width:auto">
         Hanya tampilkan pola candlestick/FVG yang berkonfluensi dengan S/R <span class="text-gold">(rekomendasi — mengurangi sinyal palsu)</span>
       </label>
-      <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Data harga dari Yahoo Finance/Binance — bisa tertinggal 1–2 menit dari broker; gunakan ⇄ Kalibrasi Semua agar sejajar dengan harga broker-mu.</div>
+      <div id="lwStatusGlobal" class="text-xs text-muted mb-3">Belum dimuat. Begitu "Muat 3 Chart" diklik, kolom Harga XAU & kalibrasi ketiga panel terisi/tersinkron otomatis — tidak perlu buka TradingView atau isi manual dulu.</div>
 
       <div class="mb-3 p-3 rounded-lg border border-line" style="background:var(--surface2)">
         <div class="text-xs font-semibold uppercase tracking-widest text-gold mb-1">Zona SMC — Area Timing Entry (wajib searah bias)</div>
@@ -1888,25 +1888,47 @@ async function loadAllCharts(){
   $('lwLoad').disabled = true;
   try {
     await ensureLW();
-    // Ketiga timeframe di-fetch SEKALIGUS (paralel) \u2014 H1 dirender begitu selesai (dipakai sbg pembobot M5/M15),
-    // M5/M15 menyusul begitu masing-masing selesai, tanpa saling menunggu.
+    // Ketiga timeframe di-fetch SEKALIGUS (paralel) \u2014 disimpan dulu TANPA dirender,
+    // supaya bisa auto-dikalibrasi sekali sebelum ditampilkan (hindari render dua kali/kedip).
     const jobs = { '60m': fetchCandles('60m'), '5m': fetchCandles('5m'), '15m': fetchCandles('15m') };
-    try { lwRawMap['60m'] = await jobs['60m']; safeRenderPanel('60m'); }
+    try { lwRawMap['60m'] = await jobs['60m']; }
     catch(e){ $('lwStatus-60m').textContent = '\u26a0 gagal memuat: ' + e.message; }
 
     const rest = await Promise.allSettled([jobs['5m'], jobs['15m']]);
     ['5m', '15m'].forEach((tf, idx) => {
       const r = rest[idx];
-      if (r.status === 'fulfilled'){ lwRawMap[tf] = r.value; safeRenderPanel(tf); }
+      if (r.status === 'fulfilled'){ lwRawMap[tf] = r.value; }
       else { $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + r.reason.message; }
     });
-    $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat (paralel) \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
+
+    const ref = autoCalibrate(); // isi kolom Harga XAU + kalibrasi ketiga panel otomatis, tanpa perlu klik manual
+    TF_LIST.forEach(tf => { if (lwRawMap[tf]) safeRenderPanel(tf); });
+
+    $('lwStatusGlobal').textContent = ref
+      ? '\u2713 3 chart dimuat & auto-dikalibrasi ke ' + ref.refPrice.toFixed(2) + ' (' + ref.refLabel + ', ' + ref.refAgeMin + ' mnt lalu). Masih beda dengan broker? Ketik harga persisnya di "Harga XAU saat ini" lalu klik \u21c4 Kalibrasi Semua untuk fine-tune.'
+      : '\u2713 3 chart dimuat (paralel).';
     saveChartHistorySnapshot();
   } catch(e){
     $('lwStatusGlobal').textContent = '\u26a0 ' + e.message;
   } finally {
     $('lwLoad').disabled = false;
   }
+}
+
+// Kalibrasi otomatis: samakan ketiga panel ke satu harga acuan, prioritas sumber SPOT (paling mendekati broker)
+// yang paling segar di antara ketiga timeframe yang baru dimuat \u2014 menggantikan kebutuhan baca TradingView manual.
+function autoCalibrate(){
+  const candidates = TF_LIST.map(tf => lwRawMap[tf]).filter(Boolean);
+  if (!candidates.length) return null;
+  const spotOnes = candidates.filter(r => r.label.indexOf('Spot') !== -1);
+  const pool = spotOnes.length ? spotOnes : candidates;
+  const ref = pool.reduce((a, b) => (a.ageMin <= b.ageMin ? a : b));
+  const refPrice = ref.candles[ref.candles.length - 1].close;
+  TF_LIST.forEach(tf => {
+    if (lwRawMap[tf]) lwOffsetMap[tf] = refPrice - lwRawMap[tf].candles[lwRawMap[tf].candles.length - 1].close;
+  });
+  $('xauPrice').value = refPrice.toFixed(2);
+  return { refPrice, refLabel: ref.label, refAgeMin: ref.ageMin };
 }
 
 /* ================= RIWAYAT CHART 3-TIMEFRAME ================= */

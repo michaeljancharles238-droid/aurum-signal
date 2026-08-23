@@ -279,6 +279,20 @@ tailwind.config = {
       </div>
     </div>
 
+    <!-- Riwayat Chart 3-Timeframe -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="font-display text-lg font-semibold">Riwayat Chart 3-Timeframe <span class="text-muted text-xs font-body">(belajar dari data yang sudah lewat)</span></h2>
+        <div class="flex gap-2">
+          <button id="chartHistExport" class="btn">⬇ Ekspor JSON</button>
+          <button id="chartHistClear" class="btn">Hapus semua</button>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-3">Setiap kali kamu klik "Muat 3 Chart", ringkasan zona R/S, Order Block, FVG, dan pola tiap timeframe otomatis tersimpan di sini. Klik entri untuk buka detail dan tulis catatan hasil setelah tahu kelanjutannya — supaya makin lama makin tahu pola/zona mana yang benar-benar bisa dipercaya.</p>
+      <div id="chartHistList" class="flex flex-col gap-2"></div>
+      <div id="chartHistEmpty" class="text-muted text-sm py-6 text-center">Belum ada riwayat. Klik "Muat 3 Chart" untuk mulai merekam.</div>
+    </div>
+
     <!-- Perbandingan Sumber \u2014 Chart Penuh -->
     <div class="card p-4">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
@@ -1887,12 +1901,146 @@ async function loadAllCharts(){
       else { $('lwStatus-' + tf).textContent = '\u26a0 gagal memuat: ' + r.reason.message; }
     });
     $('lwStatusGlobal').textContent = '\u2713 3 chart dimuat (paralel) \u00b7 gunakan \u21c4 Kalibrasi Semua agar sejajar dengan harga broker-mu.';
+    saveChartHistorySnapshot();
   } catch(e){
     $('lwStatusGlobal').textContent = '\u26a0 ' + e.message;
   } finally {
     $('lwLoad').disabled = false;
   }
 }
+
+/* ================= RIWAYAT CHART 3-TIMEFRAME ================= */
+const TF_LABEL_HIST = { '5m':'M5', '15m':'M15', '60m':'H1' };
+let chartHistExpanded = new Set();
+
+// Ringkas satu panel timeframe jadi data kecil (bukan seluruh candle) supaya localStorage tetap ringan.
+function summarizePanelForHistory(tf){
+  const raw = lwRawMap[tf];
+  if (!raw) return null;
+  const off = lwOffsetMap[tf] || 0;
+  const data = raw.candles.map(c => ({ time:c.time+7*3600, open:c.open+off, high:c.high+off, low:c.low+off, close:c.close+off }));
+  if (data.length < 20 || !data.every(c => [c.open,c.high,c.low,c.close].every(Number.isFinite))) return null;
+  const price = data[data.length-1].close;
+
+  const h1raw = lwRawMap['60m'];
+  const h1off = lwOffsetMap['60m'] || 0;
+  const h1data = (tf !== '60m' && h1raw) ? h1raw.candles.map(c => ({ time:c.time+7*3600, open:c.open+h1off, high:c.high+h1off, low:c.low+h1off, close:c.close+h1off })) : null;
+
+  const conf = buildConfluence(data, price, h1data);
+  const obList = detectOrderBlocks(data);
+  const fvgList = detectFVG(data);
+  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true, obList);
+
+  return {
+    price: +price.toFixed(2),
+    label: raw.label,
+    topR: conf.above.slice(0,2).map((z,i) => ({ lbl:'R'+(i+1), price:+z.p.toFixed(2), score:z.score })),
+    topS: conf.below.slice(0,2).map((z,i) => ({ lbl:'S'+(i+1), price:+z.p.toFixed(2), score:z.score })),
+    obCount: obList.length,
+    fvgFreshCount: fvgList.filter(f => !f.tested).length,
+    patterns: patterns.slice(0,4).map(p => ({ type:p.type, dir:p.dir, confluence:p.confluence }))
+  };
+}
+
+function saveChartHistorySnapshot(){
+  const panels = {};
+  let any = false;
+  TF_LIST.forEach(tf => { const s = summarizePanelForHistory(tf); if (s){ panels[tf] = s; any = true; } });
+  if (!any) return; // tidak ada panel valid, jangan simpan snapshot kosong
+
+  const entry = {
+    id: Date.now() + '-' + Math.random().toString(36).slice(2,7),
+    time: new Date().toISOString(),
+    bias: lastAnalysis ? lastAnalysis.bias : null,
+    panels,
+    note: ''
+  };
+  let hist = safeStore.get('aurum_chart_history') || [];
+  hist.unshift(entry);
+  if (hist.length > 60) hist = hist.slice(0, 60); // batasi 60 entri terbaru biar localStorage tetap ringan
+  safeStore.set('aurum_chart_history', hist);
+  renderChartHistory();
+}
+
+function fmtHistTime(iso){
+  return new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false }).format(new Date(iso));
+}
+
+function renderChartHistory(){
+  const hist = safeStore.get('aurum_chart_history') || [];
+  $('chartHistEmpty').style.display = hist.length ? 'none' : 'block';
+  const list = $('chartHistList'); list.innerHTML = '';
+
+  hist.forEach(entry => {
+    const biasCol = entry.bias === 'BUY' ? 'var(--buy)' : entry.bias === 'SELL' ? 'var(--sell)' : 'var(--muted)';
+    const open = chartHistExpanded.has(entry.id);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'rounded-lg border border-line overflow-hidden';
+    wrap.style.background = 'var(--surface2)';
+
+    const head = document.createElement('button');
+    head.className = 'w-full flex items-center gap-2 px-3 py-2 text-left text-xs flex-wrap';
+    head.innerHTML =
+      '<span class="font-mono text-muted">' + fmtHistTime(entry.time) + ' WIB</span>' +
+      '<span class="font-semibold" style="color:' + biasCol + '">' + (entry.bias || 'BELUM ADA BIAS') + '</span>' +
+      '<span class="flex-1 text-right text-muted">' + (open ? '\u25b4 tutup' : '\u25be detail') + '</span>';
+    head.onclick = () => { open ? chartHistExpanded.delete(entry.id) : chartHistExpanded.add(entry.id); renderChartHistory(); };
+    wrap.appendChild(head);
+
+    if (open){
+      const body = document.createElement('div');
+      body.className = 'px-3 pb-3 flex flex-col gap-2 text-[11px]';
+      TF_LIST.forEach(tf => {
+        const p = entry.panels[tf]; if (!p) return;
+        const rTxt = p.topR.map(z => z.lbl + ' ' + z.price + '\u2605' + z.score).join(' \u00b7 ') || '\u2014';
+        const sTxt = p.topS.map(z => z.lbl + ' ' + z.price + '\u2605' + z.score).join(' \u00b7 ') || '\u2014';
+        const patTxt = p.patterns.map(pt => (pt.dir === 'buy' ? '\ud83d\udfe2' : pt.dir === 'sell' ? '\ud83d\udd34' : '\u26aa') + pt.type + (pt.confluence ? ' \u2605' : '')).join(' \u00b7 ') || 'tidak ada pola';
+        body.innerHTML +=
+          '<div class="p-2 rounded border border-line" style="background:var(--surface)">' +
+            '<div class="font-semibold text-gold mb-1">' + TF_LABEL_HIST[tf] + ' \u00b7 ' + p.price.toFixed(2) + ' <span class="text-muted font-normal">(' + p.label + ')</span></div>' +
+            '<div class="text-muted">R: ' + rTxt + '</div>' +
+            '<div class="text-muted">S: ' + sTxt + '</div>' +
+            '<div class="text-muted">OB: ' + p.obCount + ' \u00b7 FVG fresh: ' + p.fvgFreshCount + '</div>' +
+            '<div class="text-muted">Pola: ' + patTxt + '</div>' +
+          '</div>';
+      });
+
+      const noteWrap = document.createElement('div');
+      noteWrap.innerHTML = '<label class="text-[10px] text-muted uppercase tracking-wider">Catatan hasil (koreksi/konfirmasi setelah tahu kelanjutannya)</label>';
+      const noteInput = document.createElement('textarea');
+      noteInput.rows = 2;
+      noteInput.value = entry.note || '';
+      noteInput.placeholder = 'cth: S1 4600 benar jadi support, mantul ke 4630. R1 kejebol karena berita CPI.';
+      noteInput.onchange = () => {
+        let h = safeStore.get('aurum_chart_history') || [];
+        const idx = h.findIndex(x => x.id === entry.id);
+        if (idx >= 0){ h[idx].note = noteInput.value; safeStore.set('aurum_chart_history', h); }
+      };
+      noteWrap.appendChild(noteInput);
+      body.appendChild(noteWrap);
+      wrap.appendChild(body);
+    }
+    list.appendChild(wrap);
+  });
+}
+
+$('chartHistExport').onclick = () => {
+  const hist = safeStore.get('aurum_chart_history') || [];
+  const blob = new Blob([JSON.stringify(hist, null, 2)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'aurum-chart-history-' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+};
+$('chartHistClear').onclick = () => {
+  if (confirm('Hapus semua riwayat chart? Tindakan ini tidak bisa dibatalkan.')){
+    safeStore.set('aurum_chart_history', []);
+    chartHistExpanded.clear();
+    renderChartHistory();
+  }
+};
+renderChartHistory();
 
 function drawAnalysisLevelsFor(tf){
   const series = lwSeriesMap[tf];

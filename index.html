@@ -288,7 +288,7 @@ tailwind.config = {
           <button id="chartHistClear" class="btn">Hapus semua</button>
         </div>
       </div>
-      <p class="text-xs text-muted mb-3">Setiap kali kamu klik "Muat 3 Chart", ringkasan zona R/S, Order Block, FVG, dan pola tiap timeframe otomatis tersimpan di sini. Klik entri untuk buka detail dan tulis catatan hasil setelah tahu kelanjutannya — supaya makin lama makin tahu pola/zona mana yang benar-benar bisa dipercaya.</p>
+      <p class="text-xs text-muted mb-3">Setiap kali kamu klik "Muat 3 Chart", <b class="text-gold">screenshot chart asli</b> (lengkap dengan semua garis S/R/OB/FVG yang tampil) + data lengkap tiap timeframe otomatis tersimpan di sini — identik dengan yang kamu lihat live. Klik entri untuk buka detail, klik gambar untuk perbesar, dan tulis catatan hasil setelah tahu kelanjutannya. Disimpan maks 20 entri terbaru (lebih sedikit dari sebelumnya karena kini menyertakan gambar).</p>
       <div id="chartHistList" class="flex flex-col gap-2"></div>
       <div id="chartHistEmpty" class="text-muted text-sm py-6 text-center">Belum ada riwayat. Klik "Muat 3 Chart" untuk mulai merekam.</div>
     </div>
@@ -1907,7 +1907,7 @@ async function loadAllCharts(){
     $('lwStatusGlobal').textContent = ref
       ? '\u2713 3 chart dimuat & auto-dikalibrasi ke ' + ref.refPrice.toFixed(2) + ' (' + ref.refLabel + ', ' + ref.refAgeMin + ' mnt lalu). Masih beda dengan broker? Ketik harga persisnya di "Harga XAU saat ini" lalu klik \u21c4 Kalibrasi Semua untuk fine-tune.'
       : '\u2713 3 chart dimuat (paralel).';
-    saveChartHistorySnapshot();
+    setTimeout(saveChartHistorySnapshot, 150); // jeda singkat: pastikan chart sudah selesai 'dilukis' sebelum discreenshot
   } catch(e){
     $('lwStatusGlobal').textContent = '\u26a0 ' + e.message;
   } finally {
@@ -1935,7 +1935,7 @@ function autoCalibrate(){
 const TF_LABEL_HIST = { '5m':'M5', '15m':'M15', '60m':'H1' };
 let chartHistExpanded = new Set();
 
-// Ringkas satu panel timeframe jadi data kecil (bukan seluruh candle) supaya localStorage tetap ringan.
+// Ambil FULL data (bukan ringkasan top-N) supaya persis sama dengan yang tampil live di Chart Analisis.
 function summarizePanelForHistory(tf){
   const raw = lwRawMap[tf];
   if (!raw) return null;
@@ -1948,26 +1948,47 @@ function summarizePanelForHistory(tf){
   const h1off = lwOffsetMap['60m'] || 0;
   const h1data = (tf !== '60m' && h1raw) ? h1raw.candles.map(c => ({ time:c.time+7*3600, open:c.open+h1off, high:c.high+h1off, low:c.low+h1off, close:c.close+h1off })) : null;
 
-  const conf = buildConfluence(data, price, h1data);
+  const conf = buildConfluence(data, price, h1data); // sudah dibatasi ke zona terkuat oleh buildConfluence sendiri, sama seperti live
   const obList = detectOrderBlocks(data);
   const fvgList = detectFVG(data);
-  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true, obList);
+  const smc = buildSmcZones(obList, fvgList, price); // Zona SMC lengkap, sama persis logika live
+  const patterns = detectPatterns(data, conf, $('patternStrict') ? $('patternStrict').checked : true, obList); // sudah dibatasi 6 oleh fungsinya sendiri, sama seperti live
+  const lastTime = data[data.length-1].time;
 
   return {
     price: +price.toFixed(2),
     label: raw.label,
-    topR: conf.above.slice(0,2).map((z,i) => ({ lbl:'R'+(i+1), price:+z.p.toFixed(2), score:z.score })),
-    topS: conf.below.slice(0,2).map((z,i) => ({ lbl:'S'+(i+1), price:+z.p.toFixed(2), score:z.score })),
-    obCount: obList.length,
-    fvgFreshCount: fvgList.filter(f => !f.tested).length,
-    patterns: patterns.slice(0,4).map(p => ({ type:p.type, dir:p.dir, confluence:p.confluence }))
+    R: conf.above.map((z,i) => ({ lbl:'R'+(i+1), price:+z.p.toFixed(2), score:z.score, tags:z.tags })),
+    S: conf.below.map((z,i) => ({ lbl:'S'+(i+1), price:+z.p.toFixed(2), score:z.score, tags:z.tags })),
+    smcBear: smc.bear.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), tested:z.tested, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
+    smcBull: smc.bull.map(z => ({ kind:z.kind, dir:z.dir, top:+z.top.toFixed(2), bottom:+z.bottom.toFixed(2), tested:z.tested, fifty:(z.fifty!=null?+z.fifty.toFixed(2):null), sweep:z.sweep, gap:z.gap })),
+    patterns: patterns.map(p => ({ type:p.type, dir:p.dir, confluence:p.confluence, confluenceLabel:p.confluenceLabel, desc:p.desc, agoMin: Math.max(0, Math.round((lastTime - p.time)/60)) }))
   };
+}
+
+// Ambil screenshot chart ASLI (candlestick + semua garis S/R/OB/FVG yang sedang tampil) via API bawaan Lightweight Charts.
+function captureChartImage(tf, maxW, quality){
+  try {
+    const chart = lwCharts[tf];
+    if (!chart) return null;
+    const canvas = chart.takeScreenshot();
+    if (!canvas || !canvas.width) return null;
+    const scale = Math.min(1, maxW / canvas.width);
+    const out = document.createElement('canvas');
+    out.width = Math.round(canvas.width * scale);
+    out.height = Math.round(canvas.height * scale);
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    return out.toDataURL('image/jpeg', quality);
+  } catch(e){ return null; }
 }
 
 function saveChartHistorySnapshot(){
   const panels = {};
   let any = false;
-  TF_LIST.forEach(tf => { const s = summarizePanelForHistory(tf); if (s){ panels[tf] = s; any = true; } });
+  TF_LIST.forEach(tf => {
+    const s = summarizePanelForHistory(tf);
+    if (s){ s.img = captureChartImage(tf, 480, 0.5); panels[tf] = s; any = true; }
+  });
   if (!any) return; // tidak ada panel valid, jangan simpan snapshot kosong
 
   const entry = {
@@ -1979,7 +2000,8 @@ function saveChartHistorySnapshot(){
   };
   let hist = safeStore.get('aurum_chart_history') || [];
   hist.unshift(entry);
-  if (hist.length > 60) hist = hist.slice(0, 60); // batasi 60 entri terbaru biar localStorage tetap ringan
+  // dikurangi dari 60 ke 20 entri \u2014 sekarang tiap entri menyimpan 3 gambar chart + data lengkap, jauh lebih berat dari ringkasan teks sebelumnya
+  if (hist.length > 20) hist = hist.slice(0, 20);
   safeStore.set('aurum_chart_history', hist);
   renderChartHistory();
 }
@@ -1988,13 +2010,20 @@ function fmtHistTime(iso){
   return new Intl.DateTimeFormat('id-ID', { timeZone:'Asia/Jakarta', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false }).format(new Date(iso));
 }
 
+function histBadgeRow(label, priceTxt, extra, color){
+  return '<div class="flex items-center gap-1.5 px-2 py-1 rounded flex-wrap" style="background:' + color + ';color:#14100C">' +
+    '<span class="font-semibold">' + label + '</span><span class="font-mono">' + priceTxt + '</span>' +
+    (extra ? '<span class="opacity-70 flex-1 text-right text-[10px]">' + extra + '</span>' : '') + '</div>';
+}
+
 function renderChartHistory(){
   const hist = safeStore.get('aurum_chart_history') || [];
   $('chartHistEmpty').style.display = hist.length ? 'none' : 'block';
   const list = $('chartHistList'); list.innerHTML = '';
+  const sell = cssVar('--sell'), buy = cssVar('--buy'), gold = cssVar('--gold');
 
   hist.forEach(entry => {
-    const biasCol = entry.bias === 'BUY' ? 'var(--buy)' : entry.bias === 'SELL' ? 'var(--sell)' : 'var(--muted)';
+    const biasCol = entry.bias === 'BUY' ? buy : entry.bias === 'SELL' ? sell : 'var(--muted)';
     const open = chartHistExpanded.has(entry.id);
 
     const wrap = document.createElement('div');
@@ -2006,26 +2035,56 @@ function renderChartHistory(){
     head.innerHTML =
       '<span class="font-mono text-muted">' + fmtHistTime(entry.time) + ' WIB</span>' +
       '<span class="font-semibold" style="color:' + biasCol + '">' + (entry.bias || 'BELUM ADA BIAS') + '</span>' +
-      '<span class="flex-1 text-right text-muted">' + (open ? '\u25b4 tutup' : '\u25be detail') + '</span>';
+      '<span class="flex-1 text-right text-muted">' + (open ? '\u25b4 tutup' : '\u25be detail (chart + data lengkap)') + '</span>';
     head.onclick = () => { open ? chartHistExpanded.delete(entry.id) : chartHistExpanded.add(entry.id); renderChartHistory(); };
     wrap.appendChild(head);
 
     if (open){
       const body = document.createElement('div');
-      body.className = 'px-3 pb-3 flex flex-col gap-2 text-[11px]';
+      body.className = 'px-3 pb-3 flex flex-col gap-3 text-[11px]';
+
       TF_LIST.forEach(tf => {
         const p = entry.panels[tf]; if (!p) return;
-        const rTxt = p.topR.map(z => z.lbl + ' ' + z.price + '\u2605' + z.score).join(' \u00b7 ') || '\u2014';
-        const sTxt = p.topS.map(z => z.lbl + ' ' + z.price + '\u2605' + z.score).join(' \u00b7 ') || '\u2014';
-        const patTxt = p.patterns.map(pt => (pt.dir === 'buy' ? '\ud83d\udfe2' : pt.dir === 'sell' ? '\ud83d\udd34' : '\u26aa') + pt.type + (pt.confluence ? ' \u2605' : '')).join(' \u00b7 ') || 'tidak ada pola';
-        body.innerHTML +=
-          '<div class="p-2 rounded border border-line" style="background:var(--surface)">' +
-            '<div class="font-semibold text-gold mb-1">' + TF_LABEL_HIST[tf] + ' \u00b7 ' + p.price.toFixed(2) + ' <span class="text-muted font-normal">(' + p.label + ')</span></div>' +
-            '<div class="text-muted">R: ' + rTxt + '</div>' +
-            '<div class="text-muted">S: ' + sTxt + '</div>' +
-            '<div class="text-muted">OB: ' + p.obCount + ' \u00b7 FVG fresh: ' + p.fvgFreshCount + '</div>' +
-            '<div class="text-muted">Pola: ' + patTxt + '</div>' +
-          '</div>';
+        const sec = document.createElement('div');
+        sec.className = 'p-2 rounded border border-line';
+        sec.style.background = 'var(--surface)';
+
+        let html = '<div class="font-semibold text-gold mb-1.5">' + TF_LABEL_HIST[tf] + ' \u00b7 ' + p.price.toFixed(2) + ' <span class="text-muted font-normal">(' + p.label + ')</span></div>';
+
+        if (p.img) html += '<img src="' + p.img + '" onclick="viewShot(this.src)" class="rounded border border-line mb-2 cursor-zoom-in w-full" />';
+
+        html += '<div class="grid gap-1 mb-2">';
+        [...p.R].reverse().forEach(z => { html += histBadgeRow(z.lbl, z.price.toFixed(2), '\u2605' + z.score + ' \u00b7 ' + z.tags.join('+'), sell); });
+        html += '<div class="text-center text-muted py-0.5">\u25c8 ' + p.price.toFixed(2) + '</div>';
+        p.S.forEach(z => { html += histBadgeRow(z.lbl, z.price.toFixed(2), '\u2605' + z.score + ' \u00b7 ' + z.tags.join('+'), buy); });
+        html += '</div>';
+
+        if (p.smcBear.length || p.smcBull.length){
+          html += '<div class="text-[10px] uppercase tracking-wider text-gold mb-1">Zona SMC</div><div class="grid gap-1 mb-2">';
+          [...p.smcBear, ...p.smcBull].forEach(z => {
+            const arrow = z.dir === 'sell' ? '\u25bc' : '\u25b2';
+            const col = z.dir === 'sell' ? sell : buy;
+            const status = z.tested ? 'TESTED' : 'FRESH';
+            const extra = z.kind === 'OB' ? (status + ' \u00b7 50%:' + z.fifty + ' \u00b7 ' + (z.sweep?'\u2713':'\u2717') + 'sweep ' + (z.gap?'\u2713':'\u2717') + 'gap') : status;
+            html += histBadgeRow(z.kind + arrow, z.bottom.toFixed(2) + '\u2013' + z.top.toFixed(2), extra, col);
+          });
+          html += '</div>';
+        }
+
+        if (p.patterns.length){
+          html += '<div class="text-[10px] uppercase tracking-wider text-gold mb-1">Pola Terdeteksi</div><div class="flex flex-col gap-1">';
+          p.patterns.forEach(pt => {
+            const col = pt.dir === 'buy' ? buy : pt.dir === 'sell' ? sell : gold;
+            html += '<div class="flex items-start gap-1.5">' +
+              '<span class="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style="background:' + col + '"></span>' +
+              '<div><b style="color:' + col + '">' + pt.type + '</b>' + (pt.confluence ? ' <span class="text-gold">\u2605 ' + pt.confluenceLabel + '</span>' : '') +
+              ' <span class="text-muted">\u00b7 ' + pt.agoMin + ' mnt lalu</span><br><span class="text-muted">' + pt.desc + '</span></div></div>';
+          });
+          html += '</div>';
+        }
+
+        sec.innerHTML = html;
+        body.appendChild(sec);
       });
 
       const noteWrap = document.createElement('div');

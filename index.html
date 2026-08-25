@@ -1845,13 +1845,20 @@ function renderPanel(tf){
   conf.below.forEach((z, i) => addLineW(z.p, buy,  'S' + (i+1) + ' \u2605' + z.score, z.score >= 8 ? 2 : 1));
 
   const obList = detectOrderBlocks(data);
-  obList.forEach(ob => {
-    const arrow = ob.dir === 'buy' ? '\u25b2' : '\u25bc';
-    addLineW(ob.entryPrice, gold, 'OB' + arrow + ' entry', 1);
-    addLineW(ob.fiftyPrice, gold, 'OB' + arrow + ' 50%', 1);
-  });
   const fvgList = detectFVG(data);
-  fvgList.forEach(f => addLineW(f.price, f.dir === 'buy' ? buy : sell, f.dir === 'buy' ? 'FVG\u25b2' : 'FVG\u25bc', 1));
+  // Zona SMC (Order Block + FVG) disaring/dibatasi DULU di sini \u2014 lalu dipakai SEKALIGUS untuk garis di chart
+  // MAUPUN daftar kartu di bawah, supaya keduanya selalu menampilkan zona yang persis sama (tidak ada lagi
+  // garis "siluman" di chart yang jumlahnya lebih banyak daripada yang disebut di keterangan).
+  const smc = buildSmcZones(obList, fvgList, price);
+  [...smc.bear, ...smc.bull].forEach(z => {
+    const arrow = z.dir === 'buy' ? '\u25b2' : '\u25bc';
+    if (z.kind === 'OB'){
+      addLineW(z.entryPrice, gold, 'OB' + arrow + ' entry', 1);
+      addLineW(z.fiftyPrice, gold, 'OB' + arrow + ' 50%', 1);
+    } else {
+      addLineW(z.price, z.dir === 'buy' ? buy : sell, 'FVG' + arrow, 1);
+    }
+  });
 
   // Daftar R/S (Confluence Engine) \u2014 ringkas, terpisah dari Zona SMC
   const zl = $('lwZones-' + tf); zl.innerHTML = ''; zl.classList.remove('hidden');
@@ -1871,8 +1878,7 @@ function renderPanel(tf){
   zl.innerHTML += '<div class="text-center text-muted py-0.5">\u25c8 ' + price.toFixed(2) + '</div>';
   conf.below.forEach((z, i) => zl.innerHTML += zoneRow(z, i, false));
 
-  // Zona SMC \u2014 Order Block + FVG dalam bentuk rentang, status FRESH/TESTED, validasi sweep/gap
-  const smc = buildSmcZones(obList, fvgList, price);
+  // Zona SMC \u2014 Order Block + FVG dalam bentuk rentang, status FRESH/TESTED-HELD/TESTED-BROKEN, validasi sweep/gap
   renderSmcZones(tf, smc, price, lastAnalysis ? lastAnalysis.bias : null);
   updateSmcBiasNote();
 

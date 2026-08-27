@@ -238,12 +238,21 @@ tailwind.config = {
         <div id="smcBiasNote" class="smc-bias-note text-[11px] text-muted">Belum ada bias aktif — semua zona ditampilkan setara.</div>
       </div>
 
+      <div class="mb-3 p-3 rounded-lg border" id="autoVerdictBox" style="background:var(--surface2); border-color:var(--line);">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="text-xs font-semibold uppercase tracking-widest text-gold">Penilaian Otomatis <span class="text-muted normal-case font-normal">(bahan banding — bukan sinyal mutlak, keputusan tetap milikmu)</span></div>
+          <div id="autoVerdictLabel" class="font-mono font-semibold text-sm">—</div>
+        </div>
+        <div id="autoVerdictBody" class="text-[11px] text-muted">Belum ada data. Klik "Muat 3 Chart" untuk menghasilkan penilaian otomatis dari sintesis struktur, pola, RSI, dan status zona di ketiga timeframe.</div>
+      </div>
+
       <div class="grid gap-4">
         <div id="lwPanel-5m" class="lw-panel">
           <div class="flex items-center justify-between gap-2 mb-1">
             <span class="text-xs font-semibold uppercase tracking-widest text-gold">M5</span>
             <span id="lwStatus-5m" class="text-[11px] text-muted"></span>
           </div>
+          <div id="autoVerdict-5m" class="hidden mb-2 p-2 rounded border border-line text-[11px]" style="background:var(--surface)"></div>
           <div id="lwWrap-5m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-5m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
           <div id="lwSmc-5m" class="hidden mt-1.5 grid gap-1.5"></div>
@@ -255,6 +264,7 @@ tailwind.config = {
             <span class="text-xs font-semibold uppercase tracking-widest text-gold">M15</span>
             <span id="lwStatus-15m" class="text-[11px] text-muted"></span>
           </div>
+          <div id="autoVerdict-15m" class="hidden mb-2 p-2 rounded border border-line text-[11px]" style="background:var(--surface)"></div>
           <div id="lwWrap-15m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-15m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
           <div id="lwSmc-15m" class="hidden mt-1.5 grid gap-1.5"></div>
@@ -266,6 +276,7 @@ tailwind.config = {
             <span class="text-xs font-semibold uppercase tracking-widest text-gold">H1</span>
             <span id="lwStatus-60m" class="text-[11px] text-muted"></span>
           </div>
+          <div id="autoVerdict-60m" class="hidden mb-2 p-2 rounded border border-line text-[11px]" style="background:var(--surface)"></div>
           <div id="lwWrap-60m" class="rounded-lg border border-line hidden" style="height:260px"></div>
           <div id="lwZones-60m" class="hidden mt-1.5 grid gap-1 text-[11px] font-mono"></div>
           <div id="lwSmc-60m" class="hidden mt-1.5 grid gap-1.5"></div>
@@ -1800,6 +1811,84 @@ function updateSmcBiasNote(){
   }
   els.forEach(el => { el.textContent = text; });
 }
+/* ================= PENILAIAN OTOMATIS (sintesis deterministik, bukan panggilan AI) ================= */
+let lwVerdictMap = {};
+
+// Skor -N..+N dari bukti yang SUDAH terdeteksi sistem: struktur (bobot tertinggi, mencerminkan tren aktual),
+// RSI Divergence (independen dari price action), pola berkonfluensi, dan kegagalan zona beruntun (bukti nyata, bukan dugaan).
+function computeAutoVerdict(patterns, smc, price){
+  let score = 0;
+  const reasons = [];
+
+  const structPat = patterns.find(p => p.type.indexOf('BOS') !== -1 || p.type.indexOf('CHoCH') !== -1);
+  if (structPat){
+    const w = structPat.type.indexOf('BOS') !== -1 ? 2 : 1.5; // BOS = lanjutan tren (lebih pasti); CHoCH = potensi balik (lebih spekulatif)
+    score += (structPat.dir === 'buy' ? w : -w);
+    reasons.push({ dir:structPat.dir, txt: structPat.type + ' \u2014 ' + structPat.desc });
+  }
+
+  const rsiPat = patterns.find(p => p.type.indexOf('RSI Divergence') !== -1);
+  if (rsiPat){
+    score += (rsiPat.dir === 'buy' ? 1.5 : -1.5);
+    reasons.push({ dir:rsiPat.dir, txt: rsiPat.type + ' \u2014 momentum berlawanan arah harga' });
+  }
+
+  patterns.forEach(p => {
+    if (p.type.indexOf('BOS') !== -1 || p.type.indexOf('CHoCH') !== -1 || p.type.indexOf('RSI Divergence') !== -1) return;
+    if (!p.confluence || p.dir === 'neutral') return; // tanpa konfluensi terlalu lemah utk masuk skor
+    score += (p.dir === 'buy' ? 0.5 : -0.5);
+  });
+
+  const brokenBear = smc.bear.filter(z => z.status === 'broken').length; // resistance jebol ke atas = bullish
+  const brokenBull = smc.bull.filter(z => z.status === 'broken').length; // support jebol ke bawah = bearish
+  if (brokenBear >= 2){ score += 1; reasons.push({ dir:'buy',  txt: brokenBear + ' zona resistance berturut-turut BROKEN \u2014 tekanan beli nyata, bukan dugaan' }); }
+  if (brokenBull >= 2){ score -= 1; reasons.push({ dir:'sell', txt: brokenBull + ' zona support berturut-turut BROKEN \u2014 tekanan jual nyata, bukan dugaan' }); }
+
+  const nearBull = smc.bull[0], nearBear = smc.bear[0];
+  if (nearBull && toPips(Math.abs(price - nearBull.top)) < 15)
+    reasons.push({ dir:'neutral', txt: 'Harga persis di tepi zona ' + nearBull.kind + '\u25b2 (' + (nearBull.status==='broken'?'sudah gagal sebelumnya':'belum terbukti') + ') \u2014 titik keputusan' });
+  if (nearBear && toPips(Math.abs(price - nearBear.bottom)) < 15)
+    reasons.push({ dir:'neutral', txt: 'Harga persis di tepi zona ' + nearBear.kind + '\u25bc (' + (nearBear.status==='broken'?'sudah gagal sebelumnya':'belum terbukti') + ') \u2014 titik keputusan' });
+
+  const label = score >= 2.5 ? 'BULLISH KUAT' : score >= 1 ? 'BULLISH' : score <= -2.5 ? 'BEARISH KUAT' : score <= -1 ? 'BEARISH' : 'NETRAL / SINYAL CAMPUR';
+  const color = score >= 1 ? cssVar('--buy') : score <= -1 ? cssVar('--sell') : cssVar('--muted');
+  return { label, color, score: +score.toFixed(1), reasons };
+}
+
+function renderAutoVerdict(tf, v){
+  const el = $('autoVerdict-' + tf); if (!el) return;
+  el.classList.remove('hidden');
+  const reasonsHtml = v.reasons.length
+    ? v.reasons.map(r => {
+        const col = r.dir === 'buy' ? cssVar('--buy') : r.dir === 'sell' ? cssVar('--sell') : cssVar('--muted');
+        return '<div class="flex items-start gap-1.5"><span class="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style="background:' + col + '"></span><span class="text-muted">' + r.txt + '</span></div>';
+      }).join('')
+    : '<div class="text-muted">Tidak ada sinyal kuat terdeteksi \u2014 kondisi ambigu.</div>';
+  el.innerHTML = '<div class="font-semibold mb-1" style="color:' + v.color + '">' + v.label + ' <span class="text-muted font-normal">(skor ' + (v.score>=0?'+':'') + v.score + ')</span></div>' + reasonsHtml;
+}
+
+// Gabungan 3 timeframe dgn bobot top-down: H1 paling menentukan (bias), M15 penengah, M5 paling ringan (cuma timing)
+// \u2014 sesuai metodologi "higher timeframe bias, lower timeframe entry" yang sudah jadi prinsip dashboard ini.
+function renderOverallVerdict(){
+  const box = $('autoVerdictLabel'), body = $('autoVerdictBody');
+  if (!box || !body) return;
+  const weights = { '60m':3, '15m':2, '5m':1 };
+  let total = 0, wsum = 0;
+  const lines = [];
+  TF_LIST.forEach(tf => {
+    const v = lwVerdictMap[tf]; if (!v) return;
+    total += v.score * weights[tf]; wsum += weights[tf];
+    lines.push('<div><b style="color:' + v.color + '">' + TF_LABEL_HIST[tf] + '</b>: ' + v.label + ' (' + (v.score>=0?'+':'') + v.score + ')</div>');
+  });
+  if (!wsum){ box.textContent = '\u2014'; body.textContent = 'Belum ada data. Klik "Muat 3 Chart" untuk menghasilkan penilaian otomatis dari sintesis struktur, pola, RSI, dan status zona di ketiga timeframe.'; return; }
+  const avg = total / wsum;
+  const label = avg >= 1.5 ? 'BULLISH (dominan H1)' : avg >= 0.5 ? 'BULLISH LEMAH' : avg <= -1.5 ? 'BEARISH (dominan H1)' : avg <= -0.5 ? 'BEARISH LEMAH' : 'NETRAL / TIMEFRAME BERTENTANGAN';
+  const color = avg >= 0.5 ? cssVar('--buy') : avg <= -0.5 ? cssVar('--sell') : cssVar('--muted');
+  box.textContent = label;
+  box.style.color = color;
+  body.innerHTML = '<div class="grid gap-1 mb-1">' + lines.join('') + '</div><div class="text-[10px] opacity-70">Bobot: H1\u00d73, M15\u00d72, M5\u00d71 \u2014 mengikuti prinsip "H1 tentukan bias, M15/M5 cari timing." Ini bahan banding otomatis, bukan sinyal eksekusi \u2014 tetap jalankan checklist konfirmasi chart sebelum entry.</div>';
+}
+
 function renderPanel(tf){
   const raw = lwRawMap[tf];
   if (!raw) return;
@@ -1886,6 +1975,15 @@ function renderPanel(tf){
   const lastTime = data[data.length-1].time;
   renderPatternMarkers(series, patterns, lastTime);
   renderPatternList(tf, patterns, lastTime);
+
+  // Penilaian Otomatis: sintesis struktur (BOS/CHoCH) + RSI Divergence + pola berkonfluensi + status zona
+  // jadi satu kesimpulan per timeframe \u2014 murni logika deterministik dari sinyal yang sudah dihitung, bukan panggilan AI.
+  if (TF_LIST.indexOf(tf) !== -1){
+    const verdict = computeAutoVerdict(patterns, smc, price);
+    lwVerdictMap[tf] = verdict;
+    renderAutoVerdict(tf, verdict);
+    renderOverallVerdict();
+  }
 
   drawAnalysisLevelsFor(tf);
   if (!$('xauPrice').value) $('xauPrice').value = price.toFixed(2);
